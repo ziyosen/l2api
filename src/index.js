@@ -9,23 +9,25 @@ export default {
       "Referer": "https://drakor.nimegami.id/"
     };
 
+    // Base URL Target
     const BASE_TARGET = "https://drakor.nimegami.id";
 
-    // ENDPOINT UTAMA (Support Home, Genre, Year, Sedang Tayang)
+    // ENDPOINT UTAMA
     if (path === "/" || path === "/home" || path.startsWith("/genre/") || path.startsWith("/year-release/") || path === "/sedang-tayang") {
       
+      // Tentukan target path berdasarkan endpoint yang dipanggil
       let targetPath = path === "/" ? "/" : path;
+      
       const pagePromises = [];
-
-      // SEKARANG TARIK 10 HALAMAN BOS!
-      for (let i = 1; i <= 10; i++) {
-        // Logika penanganan slash agar tidak double (//)
-        const cleanPath = targetPath.endsWith('/') ? targetPath : `${targetPath}/`;
-        const pagePath = i === 1 ? cleanPath : `${cleanPath}page/${i}/`;
+      // Ambil 5 halaman koleksi
+      for (let i = 1; i <= 5; i++) {
+        // Nimegami biasanya pakai format /page/2/ atau ?page=2
+        const separator = targetPath.includes('?') ? '&' : '/';
+        const pagePath = i === 1 ? targetPath : `${targetPath}${separator}page/${i}/`.replace(/\/+/g, '/');
         
         pagePromises.push(
           fetch(`${BASE_TARGET}${pagePath}`, { headers })
-            .then(res => res.ok ? res.text() : "")
+            .then(res => res.text())
             .catch(() => "")
         );
       }
@@ -35,56 +37,49 @@ export default {
 
       pagesHtml.forEach(html => {
         if (html) {
-          const movies = parseNimegami(html);
+          const movies = parseNimegami(html, BASE_TARGET);
           allMovies = allMovies.concat(movies);
         }
       });
 
-      // Buang data duplikat kalau ada link yang sama antar page
-      const uniqueMovies = Array.from(new Map(allMovies.map(m => [m.link, m])).values());
-
       return new Response(JSON.stringify({
         status: "success",
-        total_data: uniqueMovies.length,
-        pages_fetched: 10,
-        data: uniqueMovies
+        total_data: allMovies.length,
+        endpoint: path,
+        data: allMovies
       }), {
-        headers: { 
-            "Content-Type": "application/json", 
-            "Access-Control-Allow-Origin": "*" 
-        }
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
       });
     }
 
-    // ENDPOINT DETAIL
+    // ENDPOINT DETAIL (Ambil Link Video)
     if (path === "/detail") {
       const targetUrl = params.get("url");
       if (!targetUrl) return new Response(JSON.stringify({ error: "No URL" }), { status: 400 });
 
-      try {
-        const res = await fetch(targetUrl, { headers });
-        const html = await res.text();
-        const videoMatches = html.match(/https?:\/\/[^"']+\.(?:m3u8|mp4|mkv)[^"']*/g) || [];
-        
-        return new Response(JSON.stringify({
-          status: "success",
-          streams: [...new Set(videoMatches)]
-        }), {
-          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-        });
-      } catch (e) {
-        return new Response(JSON.stringify({ error: "Gagal ambil detail" }), { status: 500 });
-      }
+      const res = await fetch(targetUrl, { headers });
+      const html = await res.text();
+      
+      // Scraper link video (m3u8/mp4)
+      const videoMatches = html.match(/https?:\/\/[^"']+\.(?:m3u8|mp4|mkv)[^"']*/g) || [];
+      
+      return new Response(JSON.stringify({
+        status: "success",
+        streams: [...new Set(videoMatches)]
+      }), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+      });
     }
 
-    return new Response(JSON.stringify({ message: "Gak ada jalan bos!" }), { status: 404 });
+    return new Response(JSON.stringify({ message: "Gak ada endpoint itu bos!" }), { status: 404 });
   }
 };
 
-function parseNimegami(html) {
+// FUNGSI SCRAPER KHUSUS NIMEGAMI
+function parseNimegami(html, base) {
   const movies = [];
-  // Regex untuk Nimegami (Link, Image, Title)
-  // Mencari pola article atau div yang membungkus post
+  // Struktur Nimegami biasanya pakai article atau div class 'archive-post'
+  // Regex ini mencari link, gambar, dan judul
   const regex = /<article[^>]*>[\s\S]*?<a href="([^"]+)"[\s\S]*?<img[^>]+src="([^"]+)"[\s\S]*?<h2[^>]*>([\s\S]*?)<\/h2>/g;
   
   let match;
