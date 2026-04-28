@@ -5,39 +5,51 @@ export default {
     const params = url.searchParams;
 
     const headers = {
-      "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-      "Referer": "https://drakor.nimegami.id/"
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     };
 
-    const BASE_TARGET = "https://drakor.nimegami.id";
+    const BASE_TARGET = "http://45.11.57.16"; 
 
-    if (path === "/" || path === "/home" || path.startsWith("/genre/") || path.startsWith("/year-release/") || path === "/sedang-tayang") {
-      let targetPath = path === "/" ? "/" : path;
+    // ENDPOINT ROUTER
+    if (path === "/" || path === "/korea" || path === "/jepang" || path === "/thailand" || path === "/netflix") {
+      
+      let targetUrl = "";
+      if (path === "/" || path === "/korea") {
+        targetUrl = `${BASE_TARGET}/series/?country%5B%5D=south-korea&status=&type=Drama&order=update`;
+      } else if (path === "/jepang") {
+        targetUrl = `${BASE_TARGET}/series/?country%5B%5D=japan&type=Drama&order=update`;
+      } else if (path === "/thailand") {
+        targetUrl = `${BASE_TARGET}/series/?country%5B%5D=thailand&status=&type=Drama&order=update`;
+      } else if (path === "/netflix") {
+        targetUrl = `${BASE_TARGET}/network/netflix/`;
+      }
+
       const pagePromises = [];
-
-      for (let i = 1; i <= 10; i++) {
-        const cleanPath = targetPath.endsWith('/') ? targetPath : `${targetPath}/`;
-        const pagePath = i === 1 ? cleanPath : `${cleanPath}page/${i}/`;
+      // Kita ambil 5-10 halaman
+      for (let i = 1; i <= 5; i++) {
+        const pagedUrl = i === 1 ? targetUrl : `${targetUrl}${targetUrl.includes('?') ? '&' : '?'}page=${i}`;
         pagePromises.push(
-          fetch(`${BASE_TARGET}${pagePath}`, { headers }).then(res => res.text()).catch(() => "")
+          fetch(pagedUrl, { headers }).then(res => res.text()).catch(() => "")
         );
       }
 
       const pagesHtml = await Promise.all(pagePromises);
       let allMovies = [];
-      pagesHtml.forEach(html => { if (html) allMovies = allMovies.concat(parseNimegami(html)); });
+      pagesHtml.forEach(html => { if (html) allMovies = allMovies.concat(parseIPWeb(html, BASE_TARGET)); });
 
       const uniqueMovies = Array.from(new Map(allMovies.map(m => [m.link, m])).values());
 
       return new Response(JSON.stringify({
         status: "success",
         total_data: uniqueMovies.length,
+        category: path.replace('/', ''),
         data: uniqueMovies
       }), {
         headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
       });
     }
 
+    // ENDPOINT DETAIL
     if (path === "/detail") {
       const targetUrl = params.get("url");
       if (!targetUrl) return new Response("{}", { status: 400 });
@@ -46,13 +58,13 @@ export default {
       const html = await res.text();
       
       let streams = [];
-      // Cari semua link iframe dan link player
-      const rawStreams = html.match(/https?:\/\/(?:p2p|nyamnyam|stream|player|embed|vipanel|nimegami)[^"']+/gi) || [];
-      rawStreams.forEach(s => {
-          if (!s.includes('.js') && !s.includes('.css') && !s.includes('.png')) {
-              streams.push(s);
-          }
-      });
+      // Cari Iframe Player
+      const iframeMatch = html.match(/<iframe[^>]+src="([^"]+)"/i);
+      if (iframeMatch) streams.push(iframeMatch[1]);
+      
+      // Cari link embed lainnya
+      const playerMatches = html.match(/https?:\/\/(?:p2p|nyamnyam|embed|player|stream|vipanel)[^"']+/gi) || [];
+      playerMatches.forEach(s => streams.push(s));
 
       return new Response(JSON.stringify({
         status: "success",
@@ -61,21 +73,23 @@ export default {
         headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
       });
     }
-    return new Response("Not Found", { status: 404 });
+
+    return new Response("Endpoint Not Found", { status: 404 });
   }
 };
 
-function parseNimegami(html) {
+function parseIPWeb(html, base) {
   const movies = [];
-  // Regex Baru: Lebih agresif nangkep pola link post di Nimegami
-  const regex = /<h2[^>]*>\s*<a href="([^"]+)"[^>]*>([\s\S]*?)<\/a>\s*<\/h2>[\s\S]*?<img[^>]+src="([^"]+)"/gi;
+  // Regex khusus struktur IP 45.11.57.16
+  // Biasanya judul ada di class "title" atau tag <h4>/<h2> dalam class "article"
+  const regex = /<article[^>]*>[\s\S]*?<a href="([^"]+)"[^>]*>[\s\S]*?<img[^>]+src="([^"]+)"[^>]*>[\s\S]*?<h2 class="entry-title"[^>]*>([\s\S]*?)<\/h2>/gi;
   
   let match;
   while ((match = regex.exec(html)) !== null) {
     movies.push({
-      title: match[2].replace(/<[^>]+>/g, '').trim(),
+      title: match[3].replace(/<[^>]+>/g, '').trim(),
       link: match[1],
-      img: match[3]
+      img: match[2]
     });
   }
   return movies;
