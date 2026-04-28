@@ -6,91 +6,89 @@ export default {
 
     const headers = {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      "Referer": "https://drakor.kita.mobi/"
+      "Referer": "https://drakor.nimegami.id/"
     };
 
-    // ENDPOINT UTAMA ( / )
-    if (path === "/" || path === "/all") {
-      const media_type = params.get("media_type") || "c2d0de";
-      const genre = params.get("genre") || "c2d0de";
-      const country = params.get("country") || "c2d0de";
-      const year = params.get("year") || "c2d0de";
+    // Base URL Target
+    const BASE_TARGET = "https://drakor.nimegami.id";
 
+    // ENDPOINT UTAMA
+    if (path === "/" || path === "/home" || path.startsWith("/genre/") || path.startsWith("/year-release/") || path === "/sedang-tayang") {
+      
+      // Tentukan target path berdasarkan endpoint yang dipanggil
+      let targetPath = path === "/" ? "/" : path;
+      
       const pagePromises = [];
-      // Ambil 5 halaman sekaligus
+      // Ambil 5 halaman koleksi
       for (let i = 1; i <= 5; i++) {
-        const targetUrl = `https://drakor.kita.mobi/all?page=${i}&genre=${genre}&year=${year}&country=${country}&media_type=${media_type}`;
-        pagePromises.push(fetch(targetUrl, { headers }).then(res => res.text()));
+        // Nimegami biasanya pakai format /page/2/ atau ?page=2
+        const separator = targetPath.includes('?') ? '&' : '/';
+        const pagePath = i === 1 ? targetPath : `${targetPath}${separator}page/${i}/`.replace(/\/+/g, '/');
+        
+        pagePromises.push(
+          fetch(`${BASE_TARGET}${pagePath}`, { headers })
+            .then(res => res.text())
+            .catch(() => "")
+        );
       }
 
       const pagesHtml = await Promise.all(pagePromises);
       let allMovies = [];
 
       pagesHtml.forEach(html => {
-        const movies = parseMovies(html);
-        allMovies = allMovies.concat(movies);
+        if (html) {
+          const movies = parseNimegami(html, BASE_TARGET);
+          allMovies = allMovies.concat(movies);
+        }
       });
 
       return new Response(JSON.stringify({
         status: "success",
         total_data: allMovies.length,
+        endpoint: path,
         data: allMovies
       }), {
-        headers: { 
-          "Content-Type": "application/json", 
-          "Access-Control-Allow-Origin": "*" 
-        }
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
       });
     }
 
-    // ENDPOINT DETAIL ( /detail )
+    // ENDPOINT DETAIL (Ambil Link Video)
     if (path === "/detail") {
       const targetUrl = params.get("url");
-      if (!targetUrl) return new Response(JSON.stringify({ error: "No URL provided" }), { status: 400 });
+      if (!targetUrl) return new Response(JSON.stringify({ error: "No URL" }), { status: 400 });
 
-      try {
-        const res = await fetch(targetUrl, { headers });
-        const html = await res.text();
-        
-        // Cari link video M3U8 atau MP4 di dalam script
-        const videoMatches = html.match(/https?:\/\/[^"']+\.(?:m3u8|mp4|mkv)[^"']*/g) || [];
-        
-        return new Response(JSON.stringify({
-          status: "success",
-          streams: [...new Set(videoMatches)] // Buang link duplikat
-        }), {
-          headers: { 
-            "Content-Type": "application/json", 
-            "Access-Control-Allow-Origin": "*" 
-          }
-        });
-      } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), { status: 500 });
-      }
+      const res = await fetch(targetUrl, { headers });
+      const html = await res.text();
+      
+      // Scraper link video (m3u8/mp4)
+      const videoMatches = html.match(/https?:\/\/[^"']+\.(?:m3u8|mp4|mkv)[^"']*/g) || [];
+      
+      return new Response(JSON.stringify({
+        status: "success",
+        streams: [...new Set(videoMatches)]
+      }), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+      });
     }
 
-    return new Response(JSON.stringify({ message: "Endpoint tidak ditemukan" }), { status: 404 });
+    return new Response(JSON.stringify({ message: "Gak ada endpoint itu bos!" }), { status: 404 });
   }
 };
 
-// FUNGSI SCRAPER LIST FILM
-function parseMovies(html) {
+// FUNGSI SCRAPER KHUSUS NIMEGAMI
+function parseNimegami(html, base) {
   const movies = [];
-  
-  // Regex disesuaikan dengan struktur: <div class="item"> <a href="..."> <img src="..."> <h3>Judul</h3>
-  // Menggunakan regex yang lebih fleksibel karena spasi/newline di HTML sering beda-beda
-  const regex = /<div class="item">[\s\S]*?<a href="([^"]+)"[\s\S]*?<img[^>]+src="([^"]+)"[\s\S]*?<h3>([\s\S]*?)<\/h3>/g;
+  // Struktur Nimegami biasanya pakai article atau div class 'archive-post'
+  // Regex ini mencari link, gambar, dan judul
+  const regex = /<article[^>]*>[\s\S]*?<a href="([^"]+)"[\s\S]*?<img[^>]+src="([^"]+)"[\s\S]*?<h2[^>]*>([\s\S]*?)<\/h2>/g;
   
   let match;
   while ((match = regex.exec(html)) !== null) {
-    let rawTitle = match[3].replace(/<[^>]+>/g, '').trim();
-    let rawLink = match[1];
-    let rawImg = match[2];
-
+    let title = match[3].replace(/<[^>]+>/g, '').trim();
     movies.push({
-      title: rawTitle,
-      link: rawLink.startsWith('http') ? rawLink : `https://drakor.kita.mobi${rawLink}`,
-      img: rawImg.startsWith('http') ? rawImg : `https://drakor.kita.mobi${rawImg}`
+      title: title,
+      link: match[1],
+      img: match[2]
     });
   }
   return movies;
