@@ -1,79 +1,83 @@
-import { Hono } from 'hono'
-import { cors } from 'hono/cors'
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const path = url.pathname;
+    const params = url.searchParams;
 
-const app = new Hono()
-app.use('*', cors())
+    // Header biar gak disangka bot
+    const headers = {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    };
 
-// Helper untuk scraping per halaman
-async function scrapePage(params) {
-  const { page, media_type, genre, year, country } = params
-  
-  // Membangun URL sesuai format target
-  // Default 'c2d0de' digunakan jika parameter tidak diisi
-  const baseUrl = 'https://drakor.kita.mobi/
-  const query = new URLSearchParams({
-    page: page || '1',
-    genre: genre || 'c2d0de',
-    year: year || 'c2d0de',
-    country: country || 'c2d0de',
-    media_type: media_type || 'c2d0de'
-  })
+    // Endpoint Utama
+    if (path === "/all") {
+      const media_type = params.get("media_type") || "c2d0de";
+      const genre = params.get("genre") || "c2d0de";
+      const country = params.get("country") || "c2d0de";
+      const year = params.get("year") || "c2d0de";
 
-  const response = await fetch(`${baseUrl}?${query.toString()}`, {
-    headers: { 'User-Agent': 'Mozilla/5.0' }
-  })
+      // Kita tarik 5 halaman sekaligus secara paralel
+      const pagePromises = [];
+      for (let i = 1; i <= 5; i++) {
+        const targetUrl = `https://drakor.kita.mobi/all?page=${i}&genre=${genre}&year=${year}&country=${country}&media_type=${media_type}`;
+        pagePromises.push(fetch(targetUrl, { headers }).then(res => res.text()));
+      }
+
+      const pagesHtml = await Promise.all(pagePromises);
+      let allMovies = [];
+
+      pagesHtml.forEach(html => {
+        const movies = parseMovies(html);
+        allMovies = allMovies.concat(movies);
+      });
+
+      return new Response(JSON.stringify({
+        status: "success",
+        total_data: allMovies.length,
+        data: allMovies
+      }), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+      });
+    }
+
+    // Endpoint Detail untuk ambil link Video/M3U8
+    if (path === "/detail") {
+      const targetUrl = params.get("url");
+      if (!targetUrl) return new Response("Missing URL", { status: 400 });
+
+      const res = await fetch(targetUrl, { headers });
+      const html = await res.text();
+      
+      // Scraper link video (biasanya ada di dalam tag source atau script)
+      const streams = [...html.matchAll(/file:\s*"(https?:\/\/[^"]+)"/g)].map(m => m[1]);
+      const m3u8 = [...html.matchAll(/src:\s*"(https?:\/\/[^"]+\.m3u8)"/g)].map(m => m[1]);
+
+      return new Response(JSON.stringify({
+        title: "Streaming Link",
+        streams: [...new Set([...streams, ...m3u8])]
+      }), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+      });
+    }
+
+    return new Response("API Movie Ready Bosku!", { status: 200 });
+  }
+};
+
+// Fungsi Scraper List Film
+function parseMovies(html) {
+  const movies = [];
+  // Regex untuk ambil gambar, link, dan judul
+  // Pola web drakor.kita.mobi biasanya pakai div class tertentu
+  const regex = /<a\s+href="([^"]+)"\s+class="movie-item">[\s\S]*?<img\s+src="([^"]+)"[\s\S]*?<h2[^>]*>([\s\S]*?)<\/h2>/g;
   
-  const html = await response.text()
-  const results = []
-  
-  // Regex untuk mengambil data (Sesuaikan dengan struktur HTML drakor.kita.mobi)
-  // Ini contoh untuk mengambil Link, Judul, dan Gambar Poster
-  const regex = /<div class="video-item">[\s\S]*?href="([^"]+)" title="([^"]+)"[\s\S]*?src="([^"]+)"/g
-  let match
+  let match;
   while ((match = regex.exec(html)) !== null) {
-    results.push({
-      title: match[2],
-      link: match[1],
-      poster: match[3],
-      id: match[1].split('/').pop()
-    })
+    movies.push({
+      title: match[3].trim(),
+      link: match[1].startsWith('http') ? match[1] : `https://drakor.kita.mobi${match[1]}`,
+      img: match[2]
+    });
   }
-  return results
+  return movies;
 }
-
-app.get('/all', async (c) => {
-  const media_type = c.req.query('media_type')
-  const genre = c.req.query('genre')
-  const year = c.req.query('year')
-  const country = c.req.query('country')
-
-  try {
-    // Membuat array promise untuk 5 halaman (page 1 sampai 5)
-    const pagesToFetch = [1, 2, 3, 4, 5]
-    
-    const allPagesResults = await Promise.all(
-      pagesToFetch.map(p => scrapePage({ 
-        page: p, 
-        media_type, 
-        genre, 
-        year, 
-        country 
-      }))
-    )
-
-    // Menggabungkan semua hasil (flatten array)
-    const finalData = allPagesResults.flat()
-
-    return c.json({
-      success: true,
-      total_items: finalData.length,
-      pages_scraped: pagesToFetch.length,
-      data: finalData
-    })
-
-  } catch (error) {
-    return c.json({ success: false, error: error.message }, 500)
-  }
-})
-
-export default app
