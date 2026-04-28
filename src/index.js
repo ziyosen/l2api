@@ -10,7 +10,7 @@ async function scrapePage(params) {
   
   // Membangun URL sesuai format target
   // Default 'c2d0de' digunakan jika parameter tidak diisi
-  const baseUrl = 'https://drakor.kita.mobi/all'
+  const baseUrl = 'https://drakor.kita.mobi/
   const query = new URLSearchParams({
     page: page || '1',
     genre: genre || 'c2d0de',
