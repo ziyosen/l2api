@@ -1,0 +1,14 @@
+{
+  "name": "hometea-api",
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "hono": "^4.0.0",
+    "cheerio": "^1.0.0-rc.12"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}
