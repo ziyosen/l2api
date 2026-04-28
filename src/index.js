@@ -5,13 +5,15 @@ export default {
     const params = url.searchParams;
 
     const headers = {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-      "Referer": "https://www.dracinema.com/"
+      // Pake User-Agent iPhone biar server Dracinema gak curiga
+      "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+      "Referer": "https://www.dracinema.com/",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
     };
 
     const BASE_TARGET = "https://www.dracinema.com";
 
-    // ROUTING ENDPOINT BERDASARKAN REQUEST LU
+    // ROUTING ENDPOINT
     const routes = {
       "/collections": "/collections",
       "/romantis": "/genre/romantis",
@@ -25,32 +27,31 @@ export default {
 
     if (path === "/" || routes[path]) {
       let targetPath = routes[path] || "/";
-      const pagePromises = [];
+      
+      try {
+        const res = await fetch(`${BASE_TARGET}${targetPath}`, { headers });
+        const html = await res.text();
+        
+        // Panggil fungsi scraper
+        const allMovies = parseDracinema(html, BASE_TARGET);
 
-      // Tarik 5 halaman
-      for (let i = 1; i <= 5; i++) {
-        const pagePath = i === 1 ? targetPath : `${targetPath}?page=${i}`;
-        pagePromises.push(
-          fetch(`${BASE_TARGET}${pagePath}`, { headers }).then(res => res.text()).catch(() => "")
-        );
+        return new Response(JSON.stringify({
+          status: "success",
+          total_data: allMovies.length,
+          endpoint: path,
+          data: allMovies
+        }), {
+          headers: { 
+            "Content-Type": "application/json", 
+            "Access-Control-Allow-Origin": "*" 
+          }
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 500 });
       }
-
-      const pagesHtml = await Promise.all(pagePromises);
-      let allMovies = [];
-      pagesHtml.forEach(html => { if (html) allMovies = allMovies.concat(parseDracinema(html)); });
-
-      const uniqueMovies = Array.from(new Map(allMovies.map(m => [m.link, m])).values());
-
-      return new Response(JSON.stringify({
-        status: "success",
-        total_data: uniqueMovies.length,
-        data: uniqueMovies
-      }), {
-        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-      });
     }
 
-    // ENDPOINT DETAIL (Mencoba Bypass Player)
+    // ENDPOINT DETAIL (Cari Link Video)
     if (path === "/detail") {
       const targetUrl = params.get("url");
       if (!targetUrl) return new Response("{}", { status: 400 });
@@ -60,13 +61,14 @@ export default {
         const html = await res.text();
         
         let streams = [];
-        // 1. Cari jalur iframe player
+        // Cari iframe player & link streaming
         const iframeMatch = html.match(/<iframe[^>]+src="([^"]+)"/i);
         if (iframeMatch) streams.push(iframeMatch[1]);
 
-        // 2. Cari link video tersembunyi
-        const rawMatches = html.match(/https?:\/\/(?:p2p|nyamnyam|embed|player|stream|vipanel|cdn|m3u8)[^"']+/gi) || [];
-        rawMatches.forEach(s => streams.push(s));
+        const rawMatches = html.match(/https?:\/\/(?:p2p|nyamnyam|embed|player|stream|cdn|m3u8|vipanel)[^"']+/gi) || [];
+        rawMatches.forEach(s => {
+          if(!s.includes('.js') && !s.includes('.css')) streams.push(s);
+        });
 
         return new Response(JSON.stringify({
           status: "success",
@@ -83,18 +85,26 @@ export default {
   }
 };
 
-function parseDracinema(html) {
+function parseDracinema(html, base) {
   const movies = [];
-  // Regex untuk struktur Dracinema (biasanya menggunakan card-item atau link post)
-  const regex = /<a href="([^"]+)"[^>]*>[\s\S]*?<img[^>]+src="([^"]+)"[^>]*>[\s\S]*?<h2[^>]*>([\s\S]*?)<\/h2>/gi;
+  // Regex yang lebih "rakus" buat nangkep konten Dracinema
+  // Mencari link, gambar, dan judul di dalam card
+  const regex = /<a\s+[^>]*href="([^"]+)"[^>]*>[\s\S]*?<img\s+[^>]*src="([^"]+)"[^>]*>[\s\S]*?<h[23][^>]*>([\s\S]*?)<\/h[23]>/gi;
   
   let match;
   while ((match = regex.exec(html)) !== null) {
-    movies.push({
-      title: match[3].replace(/<[^>]+>/g, '').trim(),
-      link: match[1],
-      img: match[2]
-    });
+    let title = match[3].replace(/<[^>]+>/g, '').trim();
+    let link = match[1];
+    let img = match[2];
+
+    // Filter biar gak ambil link sampah (hanya ambil link drama/video)
+    if (title && (link.includes('/video/') || link.includes('/drama/') || link.includes('/movie/'))) {
+      movies.push({
+        title: title,
+        link: link.startsWith('http') ? link : `${base}${link}`,
+        img: img.startsWith('http') ? img : `${base}${img}`
+      });
+    }
   }
   return movies;
 }
