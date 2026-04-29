@@ -1,91 +1,69 @@
 export default {
   async fetch(request) {
+    const BASE_TARGET = "https://s2.animekuindo.life";
     const url = new URL(request.url);
-    const path = url.pathname;
-    const params = url.searchParams;
+    let path = url.pathname;
+    let finalUrl = "";
 
-    const headers = {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    // 1. MAPPING ENDPOINT INTI
+    const endpointMap = {
+      "/home": "/",
+      "/schedule": "/jadwal-rilis/",
+      "/latest": "/anime-terbaru/",
+      "/popular": "/populer/",
+      "/movie": "/movie/",
+      "/batch": "/batch/"
     };
 
-    const BASE_TARGET = "https://nontongo.win"; 
-
-    // MAPPING ENDPOINT JOSS
-    const routes = {
-      "/korea": "/category/drama-korea/",
-      "/thailand": "/category/drama-thailand/",
-      "/mandarin": "/category/drama-china/",
-      "/jepang": "/category/drama-jepang/",
-      "/movie": "/category/movie/"
-    };
-
-    if (path === "/" || routes[path]) {
-      let targetPath = routes[path] || "/";
-      const pagePromises = [];
-
-      // Tarik 5-8 halaman
-      for (let i = 1; i <= 5; i++) {
-        const pagePath = i === 1 ? targetPath : `${targetPath}page/${i}/`;
-        pagePromises.push(
-          fetch(`${BASE_TARGET}${pagePath}`, { headers }).then(res => res.text()).catch(() => "")
-        );
-      }
-
-      const pagesHtml = await Promise.all(pagePromises);
-      let allMovies = [];
-      pagesHtml.forEach(html => { if (html) allMovies = allMovies.concat(parseNontonGo(html)); });
-
-      const uniqueMovies = Array.from(new Map(allMovies.map(m => [m.link, m])).values());
-
-      return new Response(JSON.stringify({
-        status: "success",
-        total_data: uniqueMovies.length,
-        data: uniqueMovies
-      }), {
-        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-      });
+    // 2. LOGIKA PENENTUAN URL TUJUAN
+    if (endpointMap[path]) {
+      finalUrl = BASE_TARGET + endpointMap[path] + url.search;
+    } else if (path.startsWith("/genres/")) {
+      // Menangani 67 genre (Action, Adventure, dll)
+      finalUrl = BASE_TARGET + path + url.search;
+    } else if (path.startsWith("/season/")) {
+      // Menangani Season (Winter 2026, dll)
+      finalUrl = BASE_TARGET + path + url.search;
+    } else if (path.startsWith("/anime/")) {
+      // Menangani detail anime & streaming
+      finalUrl = BASE_TARGET + path + url.search;
+    } else {
+      // Default fallback
+      finalUrl = BASE_TARGET + path + url.search;
     }
 
-    // ENDPOINT DETAIL
-    if (path === "/detail") {
-      const targetUrl = params.get("url");
-      if (!targetUrl) return new Response("{}", { status: 400 });
+    // 3. EKSEKUSI FETCH KE TARGET
+    try {
+      const response = await fetch(finalUrl, {
+        method: request.method,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile",
+          "Referer": BASE_TARGET,
+          "Accept": "application/json"
+        }
+      });
 
-      const res = await fetch(targetUrl, { headers });
-      const html = await res.text();
+      // 4. HANDLING RESPONSE & CORS
+      const results = await response.text();
       
-      let streams = [];
-      // Cari iframe player (Biasanya NontonGo pake player yang 'open')
-      const iframeMatch = html.match(/<iframe[^>]+src="([^"]+)"/i);
-      if (iframeMatch) streams.push(iframeMatch[1]);
+      return new Response(results, {
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*", // Izinkan akses dari Web App Anda
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type",
+          "Cache-Control": "s-maxage=1800" // Cache 30 menit agar cepat
+        }
+      });
 
-      const playerMatches = html.match(/https?:\/\/(?:p2p|nyamnyam|embed|player|stream|vipanel)[^"']+/gi) || [];
-      playerMatches.forEach(s => streams.push(s));
-
-      return new Response(JSON.stringify({
-        status: "success",
-        streams: [...new Set(streams)]
+    } catch (error) {
+      return new Response(JSON.stringify({ 
+        status: "error", 
+        message: "Gagal terhubung ke server SankaVollerei" 
       }), {
+        status: 500,
         headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
       });
     }
-
-    return new Response("Not Found", { status: 404 });
   }
 };
-
-function parseNontonGo(html) {
-  const movies = [];
-  // Regex khusus NontonGo (biasanya pake class 'item' atau 'box')
-  const regex = /<div class="[^"]*item[^"]*">[\s\S]*?<a href="([^"]+)"[^>]*>[\s\S]*?<img[^>]+src="([^"]+)"[^>]*>[\s\S]*?<h2[^>]*>([\s\S]*?)<\/h2>/gi;
-  
-  let match;
-  while ((match = regex.exec(html)) !== null) {
-    movies.push({
-      title: match[3].replace(/<[^>]+>/g, '').trim(),
-      link: match[1],
-      img: match[2]
-    });
-  }
-  return movies;
-}
