@@ -23,7 +23,22 @@ async function fetchData(url) {
     }
 }
 
-// 1. ENDPOINT: ANIME LIST (Tampilan awal dari /anime/)
+// 1. ENDPOINT: DASHBOARD
+app.get('/', async (req, reply) => {
+    return {
+        status: true,
+        project: "ZeinthHub Animeku API 🔥",
+        endpoints: {
+            anime_list: "/anime-list",
+            baru_dirilis: "/anime-baru-dirilis",
+            top_rating: "/top-rating",
+            jadwal: "/jadwal",
+            get_video: "/get-video?url=LINK_DARI_API"
+        }
+    }
+})
+
+// 2. ENDPOINT: ANIME LIST (Tampilan awal dari /anime/)
 app.get('/anime-list', async (req, reply) => {
     const $ = await fetchData(`${BASE_URL}/anime/`)
     if (!$) return reply.code(500).send({ status: false })
@@ -41,7 +56,7 @@ app.get('/anime-list', async (req, reply) => {
     return { status: true, total: results.length, data: results }
 })
 
-// 2. ENDPOINT: ANIME BARU DIRILIS
+// 3. ENDPOINT: ANIME BARU DIRILIS
 app.get('/anime-baru-dirilis', async (req, reply) => {
     const $ = await fetchData(`${BASE_URL}/anime-baru-dirilis/`)
     if (!$) return reply.code(500).send({ status: false })
@@ -59,7 +74,7 @@ app.get('/anime-baru-dirilis', async (req, reply) => {
     return { status: true, total: results.length, data: results }
 })
 
-// 3. ENDPOINT: GENRE (Sesuai list foto)
+// 4. ENDPOINT: GENRE
 app.get('/genres/:genre', async (req, reply) => {
     const { genre } = req.params
     const $ = await fetchData(`${BASE_URL}/genres/${genre}/`)
@@ -77,18 +92,51 @@ app.get('/genres/:genre', async (req, reply) => {
     return { status: true, genre, data: results }
 })
 
-// Endpoint dashboard untuk navigasi cepat
-app.get('/', async (req, reply) => {
+// 5. ENDPOINT: GET VIDEO (TAMBAHAN UNTUK PLAYER)
+app.get('/get-video', async (req, reply) => {
+    const { url } = req.query
+    if (!url) return reply.code(400).send({ status: false, message: "Masukan url anime bosku" })
+
+    const $ = await fetchData(url)
+    if (!$) return reply.code(500).send({ status: false })
+
+    // Mencari link video utama di iframe
+    const streamUrl = $('iframe').attr('src') || $('video source').attr('src')
+    
+    // Mencari link mirror/server alternatif
+    const mirrors = []
+    $('.mirror option').each((i, el) => {
+        const value = $(el).attr('value')
+        if (value) {
+            mirrors.push({
+                server: $(el).text().trim(),
+                link: value
+            })
+        }
+    })
+
     return {
         status: true,
-        project: "ZeinthHub Animeku API 🔥",
-        endpoints: {
-            anime_list: "/anime-list",
-            baru_dirilis: "/anime-baru-dirilis",
-            top_rating: "/top-rating",
-            jadwal: "/jadwal"
-        }
+        title: $('.entry-title').text().trim(),
+        video_url: streamUrl || "Link video tidak ditemukan",
+        mirrors: mirrors
     }
+})
+
+// 6. ENDPOINT: TOP RATING & JADWAL (Opsional jika ingin diaktifkan)
+app.get('/top-rating', async (req, reply) => {
+    const $ = await fetchData(`${BASE_URL}/top-rating/`)
+    if (!$) return reply.code(500).send({ status: false })
+    const results = []
+    $('.listupd .bs').each((i, el) => {
+        results.push({
+            title: $(el).find('.tt h2').text().trim(),
+            link: $(el).find('a').attr('href'),
+            image: $(el).find('img').attr('src'),
+            rating: $(el).find('.rating i').text().trim()
+        })
+    })
+    return { status: true, data: results }
 })
 
 // EXPORT FOR VERCEL
