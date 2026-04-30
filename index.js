@@ -125,8 +125,4 @@ export default async function handler(req, res) {
     await app.ready()
     app.server.emit('request', req, res)
 }
-// Tambahkan ini di paling bawah index.js HANYA untuk tes di Codespaces/Lokal
-app.listen({ port: 3000, host: '0.0.0.0' }, (err) => {
-  if (err) console.error(err)
-  console.log('API Jalan di port 3000 bosku!')
-})
+
