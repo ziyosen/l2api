@@ -23,36 +23,10 @@ async function fetchData(url) {
     }
 }
 
-// 1. ENDPOINT UTAMA & DAFTAR GENRE LENGKAP
-app.get('/', async (req, reply) => {
-    return {
-        status: true,
-        project: "ZeinthHub Animeku API 🔥",
-        all_genres: [
-            "military", "music", "mystery", "mythology", "organized-crime", 
-            "otaku-culture", "parody", "performing-arts", "pets", "psychological", 
-            "racing", "reincarnation", "reverse-harem", "romance", "samurai", 
-            "school", "sci-fi", "seinen", "shoujo", "shounen", "showbiz", 
-            "slice-of-life", "space", "sports", "strategy-game", "super-power", 
-            "supernatural", "survival", "suspense", "time-travel"
-        ],
-        endpoints: {
-            genre: "/genres/:genre_name",
-            anime_list: "/anime",
-            top_rating: "/top-rating",
-            anime_baru: "/anime-baru",
-            jadwal: "/jadwal"
-        }
-    }
-})
-
-// 2. ENDPOINT GENRE (genres/otaku-culture)
-app.get('/genres/:genre', async (req, reply) => {
-    const { genre } = req.params
-    // Mapping URL ke struktur situs: BASE_URL/genres/nama-genre
-    const $ = await fetchData(`${BASE_URL}/genres/${genre}/`)
-    
-    if (!$) return reply.code(500).send({ status: false, message: "Gagal memuat data genre." })
+// 1. ENDPOINT: ANIME LIST (Tampilan awal dari /anime/)
+app.get('/anime-list', async (req, reply) => {
+    const $ = await fetchData(`${BASE_URL}/anime/`)
+    if (!$) return reply.code(500).send({ status: false })
 
     const results = []
     $('.listupd .bs').each((i, el) => {
@@ -61,19 +35,61 @@ app.get('/genres/:genre', async (req, reply) => {
             link: $(el).find('a').attr('href'),
             image: $(el).find('img').attr('src'),
             type: $(el).find('.typez').text().trim(),
-            epx: $(el).find('.epx').text().trim()
+            status: $(el).find('.bt .epx').text().trim()
         })
     })
-
-    return { 
-        status: true, 
-        genre: genre,
-        total: results.length, 
-        data: results 
-    }
+    return { status: true, total: results.length, data: results }
 })
 
-// Endpoint lainnya (anime, top-rating, dll) tetap sama seperti sebelumnya...
+// 2. ENDPOINT: ANIME BARU DIRILIS
+app.get('/anime-baru-dirilis', async (req, reply) => {
+    const $ = await fetchData(`${BASE_URL}/anime-baru-dirilis/`)
+    if (!$) return reply.code(500).send({ status: false })
+
+    const results = []
+    $('.listupd .bs').each((i, el) => {
+        results.push({
+            title: $(el).find('.tt h2').text().trim(),
+            link: $(el).find('a').attr('href'),
+            image: $(el).find('img').attr('src'),
+            episode: $(el).find('.epx').text().trim(),
+            type: $(el).find('.typez').text().trim()
+        })
+    })
+    return { status: true, total: results.length, data: results }
+})
+
+// 3. ENDPOINT: GENRE (Sesuai list foto)
+app.get('/genres/:genre', async (req, reply) => {
+    const { genre } = req.params
+    const $ = await fetchData(`${BASE_URL}/genres/${genre}/`)
+    if (!$) return reply.code(500).send({ status: false })
+
+    const results = []
+    $('.listupd .bs').each((i, el) => {
+        results.push({
+            title: $(el).find('.tt h2').text().trim(),
+            link: $(el).find('a').attr('href'),
+            image: $(el).find('img').attr('src'),
+            rating: $(el).find('.rating i').text().trim()
+        })
+    })
+    return { status: true, genre, data: results }
+})
+
+// Endpoint dashboard untuk navigasi cepat
+app.get('/', async (req, reply) => {
+    return {
+        status: true,
+        project: "ZeinthHub Animeku API 🔥",
+        endpoints: {
+            anime_list: "/anime-list",
+            baru_dirilis: "/anime-baru-dirilis",
+            top_rating: "/top-rating",
+            jadwal: "/jadwal"
+        }
+    }
+})
 
 // EXPORT FOR VERCEL
 export default async function handler(req, res) {
