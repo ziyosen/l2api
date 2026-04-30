@@ -1,69 +1,127 @@
-export default {
-  async fetch(request) {
-    const BASE_TARGET = "https://s2.animekuindo.life";
-    const url = new URL(request.url);
-    let path = url.pathname;
-    let finalUrl = "";
+import Fastify from 'fastify'
+import cors from '@fastify/cors'
+import axios from 'axios'
+import * as cheerio from 'cheerio'
 
-    // 1. MAPPING ENDPOINT INTI
-    const endpointMap = {
-      "/home": "/",
-      "/schedule": "/jadwal-rilis/",
-      "/latest": "/anime-terbaru/",
-      "/popular": "/populer/",
-      "/movie": "/movie/",
-      "/batch": "/batch/"
-    };
+const app = Fastify({ logger: false })
+await app.register(cors, { origin: '*' })
 
-    // 2. LOGIKA PENENTUAN URL TUJUAN
-    if (endpointMap[path]) {
-      finalUrl = BASE_TARGET + endpointMap[path] + url.search;
-    } else if (path.startsWith("/genres/")) {
-      // Menangani 67 genre (Action, Adventure, dll)
-      finalUrl = BASE_TARGET + path + url.search;
-    } else if (path.startsWith("/season/")) {
-      // Menangani Season (Winter 2026, dll)
-      finalUrl = BASE_TARGET + path + url.search;
-    } else if (path.startsWith("/anime/")) {
-      // Menangani detail anime & streaming
-      finalUrl = BASE_TARGET + path + url.search;
-    } else {
-      // Default fallback
-      finalUrl = BASE_TARGET + path + url.search;
-    }
+const TARGET = 'https://otakudesu.blog'
+const HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+}
 
-    // 3. EKSEKUSI FETCH KE TARGET
+// FUNGSI UTAMA SCRAPER
+async function fetchData(url) {
     try {
-      const response = await fetch(finalUrl, {
-        method: request.method,
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile",
-          "Referer": BASE_TARGET,
-          "Accept": "application/json"
-        }
-      });
-
-      // 4. HANDLING RESPONSE & CORS
-      const results = await response.text();
-      
-      return new Response(results, {
-        headers: {
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*", // Izinkan akses dari Web App Anda
-          "Access-Control-Allow-Methods": "GET, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type",
-          "Cache-Control": "s-maxage=1800" // Cache 30 menit agar cepat
-        }
-      });
-
+        const { data } = await axios.get(url, { headers: HEADERS, timeout: 10000 })
+        return cheerio.load(data)
     } catch (error) {
-      return new Response(JSON.stringify({ 
-        status: "error", 
-        message: "Gagal terhubung ke server SankaVollerei" 
-      }), {
-        status: 500,
-        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-      });
+        console.error("Gagal narik data:", error.message)
+        return null
     }
-  }
-};
+}
+
+// 1. ENDPOINT: BERANDA (Sekaligus Daftar Genre dari Foto Bosku)
+app.get('/', async (req, reply) => {
+    return {
+        status: true,
+        project: "ZeinthHub Anime API 🔥",
+        author: "Fastify Serverless",
+        genre_list: [
+            "action", "adventure", "comedy", "demons", "drama", "ecchi", 
+            "fantasy", "game", "harem", "historical", "horror", "josei", 
+            "magic", "martial-arts", "mecha", "military", "music", "mystery", 
+            "psychological", "parody", "police", "romance", "samurai", "school", 
+            "sci-fi", "seinen", "shoujo", "shoujo-ai", "shounen", "slice-of-life", 
+            "sports", "space", "super-power", "thriller", "vampire"
+        ],
+        endpoints: ["/genres/:genre", "/jadwal-rilis", "/ongoing-anime", "/anime-list"]
+    }
+})
+
+// 2. ENDPOINT: GENRE (/genres/action)
+app.get('/genres/:genre', async (req, reply) => {
+    const genre = req.params.genre;
+    const $ = await fetchData(`${TARGET}/genres/${genre}/`)
+    if (!$) return reply.code(500).send({ status: false, message: "Target down atau diblokir." })
+
+    const results = []
+    $('.venz ul li').each((i, el) => {
+        results.push({
+            title: $(el).find('h2').text().trim(),
+            link: $(el).find('h2 a').attr('href'),
+            image: $(el).find('img').attr('src'),
+            studio: $(el).find('.set').eq(0).text().replace('Studio : ', '').trim(),
+            episode: $(el).find('.set').eq(1).text().replace('Episode : ', '').trim(),
+            rating: $(el).find('.set').eq(2).text().replace('Rating : ', '').trim(),
+        })
+    })
+    return { status: true, total: results.length, data: results }
+})
+
+// 3. ENDPOINT: ONGOING ANIME (/ongoing-anime)
+app.get('/ongoing-anime', async (req, reply) => {
+    const $ = await fetchData(`${TARGET}/ongoing-anime/`)
+    if (!$) return reply.code(500).send({ status: false })
+
+    const results = []
+    $('.venz ul li').each((i, el) => {
+        results.push({
+            title: $(el).find('h2').text().trim(),
+            link: $(el).find('h2 a').attr('href'),
+            image: $(el).find('img').attr('src'),
+            episode: $(el).find('.epz').text().trim(),
+            day: $(el).find('.epztipe').text().trim(),
+            date: $(el).find('.newnime').text().trim()
+        })
+    })
+    return { status: true, total: results.length, data: results }
+})
+
+// 4. ENDPOINT: JADWAL RILIS (/jadwal-rilis)
+app.get('/jadwal-rilis', async (req, reply) => {
+    const $ = await fetchData(`${TARGET}/jadwal-rilis/`)
+    if (!$) return reply.code(500).send({ status: false })
+
+    const results = []
+    $('.kgjdwl321').each((i, el) => {
+        const day = $(el).find('h2').text().trim()
+        const animeList = []
+        $(el).find('ul li a').each((j, a) => {
+            animeList.push({
+                title: $(a).text().trim(),
+                link: $(a).attr('href')
+            })
+        })
+        if (animeList.length > 0) results.push({ day, list: animeList })
+    })
+    return { status: true, data: results }
+})
+
+// 5. ENDPOINT: ANIME LIST (/anime-list)
+app.get('/anime-list', async (req, reply) => {
+    const $ = await fetchData(`${TARGET}/anime-list/`)
+    if (!$) return reply.code(500).send({ status: false })
+
+    const results = []
+    $('#abtext .barispenz').each((i, el) => {
+        const letter = $(el).find('.penzbar').text().trim()
+        const animes = []
+        $(el).find('.penzbar ~ a, .penzbar ~ div a').each((j, a) => {
+            animes.push({
+                title: $(a).text().trim(),
+                link: $(a).attr('href')
+            })
+        })
+        if (animes.length > 0) results.push({ letter, list: animes })
+    })
+    return { status: true, data: results }
+})
+
+// WAJIB UNTUK VERCEL SERVERLESS
+export default async function handler(req, res) {
+    await app.ready()
+    app.server.emit('request', req, res)
+}
