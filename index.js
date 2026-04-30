@@ -13,10 +13,10 @@ const HEADERS = {
 }
 
 // Helper Scraper
-async function fetchData(url) {
+async function fetchPage(url) {
     try {
-        const { data } = await axios.get(url, { headers: HEADERS, timeout: 9000 })
-        return { $, raw: data };
+        const { data } = await axios.get(url, { headers: HEADERS, timeout: 10000 });
+        return { $, html: data, load: cheerio.load(data) };
     } catch (error) {
         return null;
     }
@@ -26,112 +26,120 @@ async function fetchData(url) {
 app.get('/', async (req, reply) => {
     return {
         status: true,
-        project: "ZeinthHub Animeku API 🔥",
-        usage: "Gunakan /get-video?url=[LINK_EPISODE] untuk ambil video",
+        project: "ZeinthHub Ultimate API 🔥",
+        usage: "Gunakan /get-video?url=[LINK_EPISODE]",
         endpoints: {
-            anime_list: "/anime-list",
-            baru_dirilis: "/anime-baru-dirilis",
-            get_video: "/get-video?url="
+            list: "/anime-list",
+            recent: "/anime-baru-dirilis",
+            video: "/get-video?url="
         }
     }
 })
 
 // 2. ENDPOINT: ANIME LIST
 app.get('/anime-list', async (req, reply) => {
-    try {
-        const { data } = await axios.get(`${BASE_URL}/anime/`, { headers: HEADERS });
-        const $ = cheerio.load(data);
-        const results = [];
-        $('.listupd .bs').each((i, el) => {
-            results.push({
-                title: $(el).find('.tt h2').text().trim(),
-                link: $(el).find('a').attr('href'),
-                image: $(el).find('img').attr('src')
-            });
+    const page = await fetchPage(`${BASE_URL}/anime/`);
+    if (!page) return { status: false };
+    const $ = page.load;
+    const results = [];
+    $('.listupd .bs').each((i, el) => {
+        results.push({
+            title: $(el).find('.tt h2').text().trim(),
+            link: $(el).find('a').attr('href'),
+            image: $(el).find('img').attr('src')
         });
-        return { status: true, data: results };
-    } catch (e) { return { status: false } }
+    });
+    return { status: true, data: results };
 })
 
 // 3. ENDPOINT: ANIME BARU DIRILIS
 app.get('/anime-baru-dirilis', async (req, reply) => {
-    try {
-        const { data } = await axios.get(`${BASE_URL}/anime-baru-dirilis/`, { headers: HEADERS });
-        const $ = cheerio.load(data);
-        const results = [];
-        $('.listupd .bs').each((i, el) => {
-            results.push({
-                title: $(el).find('.tt h2').text().trim(),
-                link: $(el).find('a').attr('href'),
-                image: $(el).find('img').attr('src'),
-                episode: $(el).find('.epx').text().trim()
-            });
+    const page = await fetchPage(`${BASE_URL}/anime-baru-dirilis/`);
+    if (!page) return { status: false };
+    const $ = page.load;
+    const results = [];
+    $('.listupd .bs').each((i, el) => {
+        results.push({
+            title: $(el).find('.tt h2').text().trim(),
+            link: $(el).find('a').attr('href'),
+            image: $(el).find('img').attr('src'),
+            episode: $(el).find('.epx').text().trim()
         });
-        return { status: true, data: results };
-    } catch (e) { return { status: false } }
+    });
+    return { status: true, data: results };
 })
 
-// 4. ENDPOINT: GET VIDEO (VERSI BRUTE-FORCE)
+// 4. ENDPOINT: GET VIDEO (SUPER SCANNER VERSION)
 app.get('/get-video', async (req, reply) => {
     const { url } = req.query;
-    if (!url) return reply.code(400).send({ status: false, message: "Linknya mana bos?" });
+    if (!url) return { status: false, message: "URL kosong bos!" };
 
     try {
-        const { data } = await axios.get(url, { headers: HEADERS, timeout: 9000 });
-        const $ = cheerio.load(data);
+        const response = await axios.get(url, { headers: HEADERS, timeout: 10000 });
+        const html = response.data;
+        const $ = cheerio.load(html);
 
-        // Cari Iframe dengan Selector Normal
-        let streamUrl = $('.video-content iframe').attr('src') || 
-                        $('.player-embed iframe').attr('src') || 
-                        $('#pembed iframe').attr('src');
+        // A. Cari di Iframe Player (Standard)
+        let videoUrl = $('.video-content iframe').attr('src') || 
+                       $('.player-embed iframe').attr('src') || 
+                       $('#pembed iframe').attr('src');
 
-        // Jika Gagal, Cari Paksa pakai Regex di seluruh kode HTML (Brute Force)
-        if (!streamUrl) {
-            const regexIframe = /<iframe.*?src=['"](.*?)['"]/gi;
-            let match;
-            while ((match = regexIframe.exec(data)) !== null) {
-                const link = match[1];
-                if (link.includes('player') || link.includes('embed') || link.includes('stream')) {
-                    streamUrl = link;
-                    break;
-                }
+        // B. Deep Script Scanning (Cari link tersembunyi di JS)
+        if (!videoUrl) {
+            const scripts = $('script').text();
+            const regexLink = /(https?:\/\/[^\s'"]+(?:player|embed|stream|m3u8|mp4)[^\s'"]*)/gi;
+            const matches = scripts.match(regexLink);
+            if (matches) {
+                videoUrl = matches.find(link => !link.includes('animekuindo') && !link.includes('google-analytics'));
             }
         }
 
-        // Cari Link Mirror
+        // C. Mirror Scanning & Base64 Decoding
         const mirrors = [];
         $('.mirror option').each((i, el) => {
             const val = $(el).attr('value');
-            if (val) mirrors.push({ server: $(el).text().trim(), link: val });
+            if (val && val !== "") {
+                let linkFinal = val;
+                // Coba decode jika isinya base64
+                if (!val.startsWith('http')) {
+                    try { linkFinal = Buffer.from(val, 'base64').toString('utf-8'); } catch(e) {}
+                }
+                mirrors.push({
+                    server: $(el).text().trim(),
+                    link: linkFinal.startsWith('http') ? linkFinal : `https:${linkFinal}`
+                });
+            }
         });
+
+        // D. Final Brute Force Regex (Jika Iframe masih null)
+        if (!videoUrl && mirrors.length > 0) videoUrl = mirrors[0].link;
 
         return {
             status: true,
-            title: $('.entry-title').first().text().trim(),
-            video_url: streamUrl || "Video disembunyikan web target bos!",
+            title: $('.entry-title').first().text().trim().split('\n')[0],
+            video_url: videoUrl || "Pelindung web terlalu kuat, butuh browser beneran bos!",
             mirrors: mirrors
         };
     } catch (error) {
-        return { status: false, message: error.message };
+        return { status: false, error: error.message };
     }
 })
 
 // 5. ENDPOINT: GENRE
 app.get('/genres/:genre', async (req, reply) => {
     const { genre } = req.params;
-    try {
-        const { data } = await axios.get(`${BASE_URL}/genres/${genre}/`, { headers: HEADERS });
-        const $ = cheerio.load(data);
-        const results = [];
-        $('.listupd .bs').each((i, el) => {
-            results.push({
-                title: $(el).find('.tt h2').text().trim(),
-                link: $(el).find('a').attr('href'),
-                image: $(el).find('img').attr('src')
-            });
+    const page = await fetchPage(`${BASE_URL}/genres/${genre}/`);
+    if (!page) return { status: false };
+    const $ = page.load;
+    const results = [];
+    $('.listupd .bs').each((i, el) => {
+        results.push({
+            title: $(el).find('.tt h2').text().trim(),
+            link: $(el).find('a').attr('href'),
+            image: $(el).find('img').attr('src')
         });
-        return { status: true, genre, data: results };
-    } catch (e) { return { status: false } }
+    });
+    return { status: true, data: results };
 })
 
 export default async function handler(req, res) {
