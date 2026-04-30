@@ -12,7 +12,7 @@ const HEADERS = {
     'Referer': 'https://s2.animekuindo.life/',
 }
 
-// Helper Scraper
+// Helper Scraper Handal
 async function fetchData(url) {
     try {
         const { data } = await axios.get(url, { headers: HEADERS, timeout: 9000 })
@@ -23,22 +23,22 @@ async function fetchData(url) {
     }
 }
 
-// 1. ENDPOINT: DASHBOARD
+// 1. DASHBOARD & PETUNJUK
 app.get('/', async (req, reply) => {
     return {
         status: true,
         project: "ZeinthHub Animeku API 🔥",
+        usage: "Gunakan /get-video?url=LINK_EPISODE untuk ambil video",
         endpoints: {
             anime_list: "/anime-list",
             baru_dirilis: "/anime-baru-dirilis",
             top_rating: "/top-rating",
-            jadwal: "/jadwal",
-            get_video: "/get-video?url=LINK_DARI_API"
+            get_video: "/get-video?url="
         }
     }
 })
 
-// 2. ENDPOINT: ANIME LIST (Tampilan awal dari /anime/)
+// 2. ENDPOINT: ANIME LIST
 app.get('/anime-list', async (req, reply) => {
     const $ = await fetchData(`${BASE_URL}/anime/`)
     if (!$) return reply.code(500).send({ status: false })
@@ -49,11 +49,10 @@ app.get('/anime-list', async (req, reply) => {
             title: $(el).find('.tt h2').text().trim(),
             link: $(el).find('a').attr('href'),
             image: $(el).find('img').attr('src'),
-            type: $(el).find('.typez').text().trim(),
-            status: $(el).find('.bt .epx').text().trim()
+            type: $(el).find('.typez').text().trim()
         })
     })
-    return { status: true, total: results.length, data: results }
+    return { status: true, data: results }
 })
 
 // 3. ENDPOINT: ANIME BARU DIRILIS
@@ -67,14 +66,55 @@ app.get('/anime-baru-dirilis', async (req, reply) => {
             title: $(el).find('.tt h2').text().trim(),
             link: $(el).find('a').attr('href'),
             image: $(el).find('img').attr('src'),
-            episode: $(el).find('.epx').text().trim(),
-            type: $(el).find('.typez').text().trim()
+            episode: $(el).find('.epx').text().trim()
         })
     })
-    return { status: true, total: results.length, data: results }
+    return { status: true, data: results }
 })
 
-// 4. ENDPOINT: GENRE
+// 4. ENDPOINT: GET VIDEO (LOGIKA DIPERKUAT)
+app.get('/get-video', async (req, reply) => {
+    const { url } = req.query
+    if (!url) return reply.code(400).send({ status: false, message: "Linknya mana bos?" })
+
+    const $ = await fetchData(url)
+    if (!$) return reply.code(500).send({ status: false })
+
+    // Target area player secara spesifik agar tidak nyasar ke berita/artikel
+    let streamUrl = $('.video-content iframe').attr('src') || 
+                    $('.player-embed iframe').attr('src') || 
+                    $('#pembed iframe').attr('src');
+
+    // Jika tidak ada di area standar, cari iframe manapun yang mengandung kata 'player' atau 'embed'
+    if (!streamUrl) {
+        $('iframe').each((i, el) => {
+            const src = $(el).attr('src');
+            if (src && (src.includes('player') || src.includes('embed') || src.includes('stream'))) {
+                streamUrl = src;
+            }
+        });
+    }
+
+    const mirrors = []
+    $('.mirror option').each((i, el) => {
+        const val = $(el).attr('value')
+        if (val) {
+            mirrors.push({
+                server: $(el).text().trim(),
+                link: val
+            })
+        }
+    })
+
+    return {
+        status: true,
+        title: $('.entry-title').text().trim() || "Anime Episode",
+        video_url: streamUrl || "Video tidak ditemukan di halaman ini",
+        mirrors: mirrors.length > 0 ? mirrors : "Server cadangan kosong"
+    }
+})
+
+// 5. ENDPOINT: GENRE
 app.get('/genres/:genre', async (req, reply) => {
     const { genre } = req.params
     const $ = await fetchData(`${BASE_URL}/genres/${genre}/`)
@@ -85,61 +125,13 @@ app.get('/genres/:genre', async (req, reply) => {
         results.push({
             title: $(el).find('.tt h2').text().trim(),
             link: $(el).find('a').attr('href'),
-            image: $(el).find('img').attr('src'),
-            rating: $(el).find('.rating i').text().trim()
+            image: $(el).find('img').attr('src')
         })
     })
     return { status: true, genre, data: results }
 })
 
-// 5. ENDPOINT: GET VIDEO (TAMBAHAN UNTUK PLAYER)
-app.get('/get-video', async (req, reply) => {
-    const { url } = req.query
-    if (!url) return reply.code(400).send({ status: false, message: "Masukan url anime bosku" })
-
-    const $ = await fetchData(url)
-    if (!$) return reply.code(500).send({ status: false })
-
-    // Mencari link video utama di iframe
-    const streamUrl = $('iframe').attr('src') || $('video source').attr('src')
-    
-    // Mencari link mirror/server alternatif
-    const mirrors = []
-    $('.mirror option').each((i, el) => {
-        const value = $(el).attr('value')
-        if (value) {
-            mirrors.push({
-                server: $(el).text().trim(),
-                link: value
-            })
-        }
-    })
-
-    return {
-        status: true,
-        title: $('.entry-title').text().trim(),
-        video_url: streamUrl || "Link video tidak ditemukan",
-        mirrors: mirrors
-    }
-})
-
-// 6. ENDPOINT: TOP RATING & JADWAL (Opsional jika ingin diaktifkan)
-app.get('/top-rating', async (req, reply) => {
-    const $ = await fetchData(`${BASE_URL}/top-rating/`)
-    if (!$) return reply.code(500).send({ status: false })
-    const results = []
-    $('.listupd .bs').each((i, el) => {
-        results.push({
-            title: $(el).find('.tt h2').text().trim(),
-            link: $(el).find('a').attr('href'),
-            image: $(el).find('img').attr('src'),
-            rating: $(el).find('.rating i').text().trim()
-        })
-    })
-    return { status: true, data: results }
-})
-
-// EXPORT FOR VERCEL
+// EXPORT UNTUK VERCEL
 export default async function handler(req, res) {
     await app.ready()
     app.server.emit('request', req, res)
