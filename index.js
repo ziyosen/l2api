@@ -57,19 +57,21 @@ async function scrapeInfinite(baseUrl, limitPage = 15) {
 app.get('/', async (c) => c.json({ status: true, data: await scrapeInfinite(TARGET, 3) }))
 
 // Genres
-const genres = ['action', 'adventure', 'animation', 'comedy', 'crime', 'drama', 'fantasy', 'family', 'horror', 'mystery', 'romance', 'sci-fi', 'thriller', 'war', 'western']
-genres.forEach(g => {
+const genresList = ['action', 'adventure', 'animation', 'comedy', 'crime', 'drama', 'fantasy', 'family', 'horror', 'mystery', 'romance', 'sci-fi', 'thriller', 'war', 'western']
+genresList.forEach(g => {
   app.get(`/genre/${g}`, async (c) => c.json({ status: true, data: await scrapeInfinite(`${TARGET}/genre/${g}/`, 10) }))
 })
 
 // Countries
-const countries = [
+const countriesList = [
   { slug: 'korea', id: 'korea' },
   { slug: 'japan', id: 'japan' },
   { slug: 'thailand', id: 'thailand' },
-  { slug: 'hong-kong', id: 'hong-kong' }
+  { slug: 'hong-kong', id: 'hong-kong' },
+  { slug: 'china', id: 'china' },
+  { slug: 'taiwan', id: 'taiwan' }
 ]
-countries.forEach(cn => {
+countriesList.forEach(cn => {
   app.get(`/country/${cn.slug}`, async (c) => {
     const searchUrl = `${TARGET}/?s=&search=advanced&country=${cn.id}`
     const data = await scrapeInfinite(searchUrl, 15)
@@ -80,27 +82,65 @@ countries.forEach(cn => {
 app.get('/semi-jepang', async (c) => c.json({ status: true, data: await scrapeInfinite(`${TARGET}/genre/semi-jepang/`, 15) }))
 app.get('/semi-korea', async (c) => c.json({ status: true, data: await scrapeInfinite(`${TARGET}/genre/semi-korea/`, 15) }))
 app.get('/semi-philippines', async (c) => c.json({ status: true, data: await scrapeInfinite(`${TARGET}/genre/semi-philippines/`, 15) }))
+app.get('/semi-barat', async (c) => c.json({ status: true, data: await scrapeInfinite(`${TARGET}/genre/semi-barat/`, 15) }))
+
 app.get('/search', async (c) => {
   const q = c.req.query('q')
   return c.json({ status: true, data: await scrapeList(`${TARGET}/?s=${q}`) })
 })
 
+// --- DETAIL ENDPOINT (FIXED & INJECTED) ---
 app.get('/detail', async (c) => {
   try {
     const url = c.req.query('url')
     const res = await fetch(url, { headers: { 'User-Agent': UA, 'Referer': TARGET } })
     const html = await res.text()
     const $ = load(html)
-    const streams = []
+    
+    const iframes = []
     $('iframe').each((i, el) => {
       let src = $(el).attr('src') || $(el).attr('data-src')
       if (src && !src.includes('ads')) {
         if (src.startsWith('//')) src = 'https:' + src
-        streams.push(src)
+        iframes.push(src)
       }
     })
-    return c.json({ status: true, streams })
-  } catch { return c.json({ status: false, streams: [] }) }
+
+    const streams = []
+    
+    // JURUS BONGKAR EMBED
+    for (const embedUrl of iframes) {
+      try {
+        const embedRes = await fetch(embedUrl, { 
+          headers: { 'User-Agent': UA, 'Referer': url },
+          signal: AbortSignal.timeout(5000)
+        })
+        const embedHtml = await embedRes.text()
+
+        // Cari link file video mentah (.mp4 / .m3u8 / .googlevideo)
+        const videoMatch = embedHtml.match(/"file":"([^"]+)"/) || 
+                           embedHtml.match(/src:\s*'([^']+)'/) ||
+                           embedHtml.match(/source\s*src="([^"]+)"/) ||
+                           embedHtml.match(/https?:\/\/[^"']+\.(?:mp4|m3u8)[^"']*/)
+
+        if (videoMatch) {
+          // Link video mentah diprioritaskan (taruh di depan)
+          const directLink = (typeof videoMatch === 'string' ? videoMatch : videoMatch[1] || videoMatch[0]).replace(/\\/g, '')
+          streams.unshift(directLink)
+        } else {
+          streams.push(embedUrl)
+        }
+      } catch {
+        streams.push(embedUrl)
+      }
+    }
+
+    // Unikkan hasil agar tidak ada link kembar
+    const uniqueStreams = [...new Set(streams)]
+    return c.json({ status: true, streams: uniqueStreams })
+  } catch { 
+    return c.json({ status: false, streams: [] }) 
+  }
 })
 
 export default handle(app)
