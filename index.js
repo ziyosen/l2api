@@ -1,76 +1,63 @@
-import Fastify from 'fastify'
-import cors from '@fastify/cors'
-import { load } from 'cheerio'
+const express = require('express');
+const axios = require('axios');
+const { load } = require('cheerio');
+const app = express();
 
-const app = Fastify({ logger: true })
-await app.register(cors)
+const UA = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36';
+const TARGET = 'https://pafipasarmuarabungo.org';
 
-const TARGET = 'https://pafipasarmuarabungo.org'
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+app.get('/detail', async (req, res) => {
+    try {
+        const url = req.query.url;
+        if (!url) return res.json({ status: false, msg: "Mana url-nya bos?" });
 
-// Helper Scraper
-async function scrapeList(url) {
-  try {
-    const res = await fetch(url, { headers: { 'User-Agent': UA, 'Referer': TARGET } })
-    const html = await res.text()
-    const $ = load(html)
-    const data = []
-    $('.ml-item, article, .item, .post-item').each((i, el) => {
-      const title = $(el).find('h2, h3, .entry-title, .title').first().text().trim()
-      const link = $(el).find('a').attr('href')
-      let img = $(el).find('img').attr('data-original') || $(el).find('img').attr('data-src') || $(el).find('img').attr('src')
-      if (title && link && link.includes(TARGET)) {
-        if (img && img.startsWith('//')) img = 'https:' + img
-        data.push({ title: title.replace(/Nonton|Movie|Subtitle|Indonesia/gi, '').trim(), link, img: img || '' })
-      }
-    })
-    return data
-  } catch { return [] }
-}
+        // 1. Ambil HTML dari target
+        const response = await axios.get(url, { 
+            headers: { 'User-Agent': UA, 'Referer': TARGET } 
+        });
+        const html = response.data;
+        const $ = load(html);
+        
+        let streams = [];
 
-// Endpoints
-app.get('/', async () => ({ status: true, data: await scrapeList(TARGET) }))
+        // 2. JURUS HEKER 1: Scan mentahan teks buat nyari link .m3u8 atau .mp4 (Bypass Iklan)
+        // Ini nyari link video murni yang biasanya disembunyiin di balik script
+        const deepScanPattern = /https?:\/\/[^"']+\.(?:m3u8|mp4|mkv)[^"']*/g;
+        const matches = html.match(deepScanPattern);
 
-app.get('/search', async (req) => {
-  const q = req.query.q
-  return { status: true, data: await scrapeList(`${TARGET}/?s=${q}`) }
-})
-
-app.get('/detail', async (req, reply) => {
-  try {
-    const url = req.query.url
-    const res = await fetch(url, { headers: { 'User-Agent': UA, 'Referer': TARGET } })
-    const html = await res.text()
-    const $ = load(html)
-    
-    const iframes = []
-    $('iframe').each((i, el) => {
-      let src = $(el).attr('src') || $(el).attr('data-src')
-      if (src && !src.includes('ads')) {
-        if (src.startsWith('//')) src = 'https:' + src
-        iframes.push(src)
-      }
-    })
-
-    const streams = []
-    for (const embedUrl of iframes) {
-      try {
-        const embedRes = await fetch(embedUrl, { headers: { 'User-Agent': UA, 'Referer': url } })
-        const embedHtml = await embedRes.text()
-        const videoMatch = embedHtml.match(/"file":"([^"]+)"/) || embedHtml.match(/src:\s*'([^']+)'/)
-        if (videoMatch) {
-          streams.unshift(videoMatch[1].replace(/\\/g, ''))
-        } else {
-          streams.push(embedUrl)
+        if (matches) {
+            matches.forEach(link => {
+                // Bersihin link dari karakter sampah kayak backslash (\/)
+                const cleanLink = link.replace(/\\/g, '');
+                if (!streams.includes(cleanLink)) streams.push(cleanLink);
+            });
         }
-      } catch { streams.push(embedUrl) }
-    }
-    return { status: true, streams: [...new Set(streams)] }
-  } catch { return { status: false, streams: [] } }
-})
 
-// PENTING: Export untuk Vercel
-export default async (req, res) => {
-  await app.ready()
-  app.server.emit('request', req, res)
-}
+        // 3. JURUS HEKER 2: Ambil Iframe buat cadangan kalau deep scan gagal
+        $('iframe').each((i, el) => {
+            let src = $(el).attr('src') || $(el).attr('data-src');
+            if (src) {
+                if (src.startsWith('//')) src = 'https:' + src;
+                // Filter biar nggak ambil iframe iklan
+                if (!src.includes('ads') && !src.includes('pop') && !streams.includes(src)) {
+                    streams.push(src);
+                }
+            }
+        });
+
+        // 4. Kasih tanda buat link Doodstream (biar kita tau itu sarang iklan)
+        const finalStreams = streams.map(s => s.includes('dood') ? `${s}#is_dood` : s);
+
+        res.json({
+            status: true,
+            results: finalStreams.length,
+            streams: finalStreams,
+            engine: "Deep-Extraction-Heker-V2"
+        });
+
+    } catch (e) {
+        res.json({ status: false, error: e.message });
+    }
+});
+
+module.exports = app;
