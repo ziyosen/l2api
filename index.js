@@ -1,98 +1,44 @@
-import { Hono } from 'hono'
+import Fastify from 'fastify'
+import cors from '@fastify/cors'
 import { load } from 'cheerio'
-import { cors } from 'hono/cors'
-import { handle } from '@hono/node-server/vercel'
 
-const app = new Hono()
-app.use('/*', cors())
+const app = Fastify({ logger: true })
+await app.register(cors)
 
 const TARGET = 'https://pafipasarmuarabungo.org'
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 
+// Helper Scraper
 async function scrapeList(url) {
   try {
-    const res = await fetch(url, { 
-      headers: { 'User-Agent': UA, 'Referer': TARGET },
-      signal: AbortSignal.timeout(7000) 
-    })
+    const res = await fetch(url, { headers: { 'User-Agent': UA, 'Referer': TARGET } })
     const html = await res.text()
     const $ = load(html)
     const data = []
-
-    $('.ml-item, article, .item, .post-item, .v-item').each((i, el) => {
-      const title = $(el).find('h2, h3, .entry-title, .mli-info h2, a.title').first().text().trim()
+    $('.ml-item, article, .item, .post-item').each((i, el) => {
+      const title = $(el).find('h2, h3, .entry-title, .title').first().text().trim()
       const link = $(el).find('a').attr('href')
       let img = $(el).find('img').attr('data-original') || $(el).find('img').attr('data-src') || $(el).find('img').attr('src')
-      
       if (title && link && link.includes(TARGET)) {
         if (img && img.startsWith('//')) img = 'https:' + img
-        data.push({ 
-          title: title.replace(/Nonton|Movie|Subtitle|Indonesia/gi, '').trim(), 
-          link, 
-          img: img || '' 
-        })
+        data.push({ title: title.replace(/Nonton|Movie|Subtitle|Indonesia/gi, '').trim(), link, img: img || '' })
       }
     })
     return data
   } catch { return [] }
 }
 
-async function scrapeInfinite(baseUrl, limitPage = 15) {
-  let combined = []
-  for (let i = 1; i <= limitPage; i += 5) {
-    const batch = []
-    for (let j = i; j < i + 5 && j <= limitPage; j++) {
-      let url = j === 1 ? baseUrl : (baseUrl.includes('?') ? `${baseUrl}&paged=${j}` : `${baseUrl.endsWith('/') ? baseUrl : baseUrl + '/'}page/${j}/`)
-      batch.push(scrapeList(url))
-    }
-    const results = await Promise.all(batch)
-    const flatRes = results.flat()
-    if (flatRes.length === 0) break 
-    combined = [...combined, ...flatRes]
-  }
-  return combined.filter((v, i, a) => a.findIndex(t => (t.link === v.link)) === i);
-}
+// Endpoints
+app.get('/', async () => ({ status: true, data: await scrapeList(TARGET) }))
 
-// --- ENDPOINTS ---
-app.get('/', async (c) => c.json({ status: true, data: await scrapeInfinite(TARGET, 3) }))
-
-// Genres
-const genresList = ['action', 'adventure', 'animation', 'comedy', 'crime', 'drama', 'fantasy', 'family', 'horror', 'mystery', 'romance', 'sci-fi', 'thriller', 'war', 'western']
-genresList.forEach(g => {
-  app.get(`/genre/${g}`, async (c) => c.json({ status: true, data: await scrapeInfinite(`${TARGET}/genre/${g}/`, 10) }))
+app.get('/search', async (req) => {
+  const q = req.query.q
+  return { status: true, data: await scrapeList(`${TARGET}/?s=${q}`) }
 })
 
-// Countries
-const countriesList = [
-  { slug: 'korea', id: 'korea' },
-  { slug: 'japan', id: 'japan' },
-  { slug: 'thailand', id: 'thailand' },
-  { slug: 'hong-kong', id: 'hong-kong' },
-  { slug: 'china', id: 'china' },
-  { slug: 'taiwan', id: 'taiwan' }
-]
-countriesList.forEach(cn => {
-  app.get(`/country/${cn.slug}`, async (c) => {
-    const searchUrl = `${TARGET}/?s=&search=advanced&country=${cn.id}`
-    const data = await scrapeInfinite(searchUrl, 15)
-    return c.json({ status: true, data })
-  })
-})
-
-app.get('/semi-jepang', async (c) => c.json({ status: true, data: await scrapeInfinite(`${TARGET}/genre/semi-jepang/`, 15) }))
-app.get('/semi-korea', async (c) => c.json({ status: true, data: await scrapeInfinite(`${TARGET}/genre/semi-korea/`, 15) }))
-app.get('/semi-philippines', async (c) => c.json({ status: true, data: await scrapeInfinite(`${TARGET}/genre/semi-philippines/`, 15) }))
-app.get('/semi-barat', async (c) => c.json({ status: true, data: await scrapeInfinite(`${TARGET}/genre/semi-barat/`, 15) }))
-
-app.get('/search', async (c) => {
-  const q = c.req.query('q')
-  return c.json({ status: true, data: await scrapeList(`${TARGET}/?s=${q}`) })
-})
-
-// --- DETAIL ENDPOINT (FIXED & INJECTED) ---
-app.get('/detail', async (c) => {
+app.get('/detail', async (req, reply) => {
   try {
-    const url = c.req.query('url')
+    const url = req.query.url
     const res = await fetch(url, { headers: { 'User-Agent': UA, 'Referer': TARGET } })
     const html = await res.text()
     const $ = load(html)
@@ -107,40 +53,24 @@ app.get('/detail', async (c) => {
     })
 
     const streams = []
-    
-    // JURUS BONGKAR EMBED
     for (const embedUrl of iframes) {
       try {
-        const embedRes = await fetch(embedUrl, { 
-          headers: { 'User-Agent': UA, 'Referer': url },
-          signal: AbortSignal.timeout(5000)
-        })
+        const embedRes = await fetch(embedUrl, { headers: { 'User-Agent': UA, 'Referer': url } })
         const embedHtml = await embedRes.text()
-
-        // Cari link file video mentah (.mp4 / .m3u8 / .googlevideo)
-        const videoMatch = embedHtml.match(/"file":"([^"]+)"/) || 
-                           embedHtml.match(/src:\s*'([^']+)'/) ||
-                           embedHtml.match(/source\s*src="([^"]+)"/) ||
-                           embedHtml.match(/https?:\/\/[^"']+\.(?:mp4|m3u8)[^"']*/)
-
+        const videoMatch = embedHtml.match(/"file":"([^"]+)"/) || embedHtml.match(/src:\s*'([^']+)'/)
         if (videoMatch) {
-          // Link video mentah diprioritaskan (taruh di depan)
-          const directLink = (typeof videoMatch === 'string' ? videoMatch : videoMatch[1] || videoMatch[0]).replace(/\\/g, '')
-          streams.unshift(directLink)
+          streams.unshift(videoMatch[1].replace(/\\/g, ''))
         } else {
           streams.push(embedUrl)
         }
-      } catch {
-        streams.push(embedUrl)
-      }
+      } catch { streams.push(embedUrl) }
     }
-
-    // Unikkan hasil agar tidak ada link kembar
-    const uniqueStreams = [...new Set(streams)]
-    return c.json({ status: true, streams: uniqueStreams })
-  } catch { 
-    return c.json({ status: false, streams: [] }) 
-  }
+    return { status: true, streams: [...new Set(streams)] }
+  } catch { return { status: false, streams: [] } }
 })
 
-export default handle(app)
+// PENTING: Export untuk Vercel
+export default async (req, res) => {
+  await app.ready()
+  app.server.emit('request', req, res)
+}
