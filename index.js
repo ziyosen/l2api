@@ -1,148 +1,106 @@
-import Fastify from 'fastify'
-import cors from '@fastify/cors'
-import axios from 'axios'
-import * as cheerio from 'cheerio'
+import { Hono } from 'hono'
+import { load } from 'cheerio'
+import { cors } from 'hono/cors'
+import { handle } from '@hono/node-server/vercel'
 
-const app = Fastify({ logger: false })
-await app.register(cors, { origin: '*' })
+const app = new Hono()
+app.use('/*', cors())
 
-const BASE_URL = 'https://s2.animekuindo.life'
-const HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Referer': 'https://s2.animekuindo.life/',
+const TARGET = 'https://pafipasarmuarabungo.org'
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+
+async function scrapeList(url) {
+  try {
+    const res = await fetch(url, { 
+      headers: { 'User-Agent': UA, 'Referer': TARGET },
+      signal: AbortSignal.timeout(7000) 
+    })
+    const html = await res.text()
+    const $ = load(html)
+    const data = []
+
+    $('.ml-item, article, .item, .post-item, .v-item').each((i, el) => {
+      const title = $(el).find('h2, h3, .entry-title, .mli-info h2, a.title').first().text().trim()
+      const link = $(el).find('a').attr('href')
+      let img = $(el).find('img').attr('data-original') || $(el).find('img').attr('data-src') || $(el).find('img').attr('src')
+      
+      if (title && link && link.includes(TARGET)) {
+        if (img && img.startsWith('//')) img = 'https:' + img
+        data.push({ 
+          title: title.replace(/Nonton|Movie|Subtitle|Indonesia/gi, '').trim(), 
+          link, 
+          img: img || '' 
+        })
+      }
+    })
+    return data
+  } catch { return [] }
 }
 
-// Helper Scraper
-async function fetchPage(url) {
-    try {
-        const { data } = await axios.get(url, { headers: HEADERS, timeout: 10000 });
-        return { $, html: data, load: cheerio.load(data) };
-    } catch (error) {
-        return null;
+async function scrapeInfinite(baseUrl, limitPage = 15) {
+  let combined = []
+  for (let i = 1; i <= limitPage; i += 5) {
+    const batch = []
+    for (let j = i; j < i + 5 && j <= limitPage; j++) {
+      let url = j === 1 ? baseUrl : (baseUrl.includes('?') ? `${baseUrl}&paged=${j}` : `${baseUrl.endsWith('/') ? baseUrl : baseUrl + '/'}page/${j}/`)
+      batch.push(scrapeList(url))
     }
+    const results = await Promise.all(batch)
+    const flatRes = results.flat()
+    if (flatRes.length === 0) break 
+    combined = [...combined, ...flatRes]
+  }
+  return combined.filter((v, i, a) => a.findIndex(t => (t.link === v.link)) === i);
 }
 
-// 1. DASHBOARD
-app.get('/', async (req, reply) => {
-    return {
-        status: true,
-        project: "ZeinthHub Ultimate API 🔥",
-        usage: "Gunakan /get-video?url=[LINK_EPISODE]",
-        endpoints: {
-            list: "/anime-list",
-            recent: "/anime-baru-dirilis",
-            video: "/get-video?url="
-        }
-    }
+// --- ENDPOINTS ---
+app.get('/', async (c) => c.json({ status: true, data: await scrapeInfinite(TARGET, 3) }))
+
+// Genres
+const genres = ['action', 'adventure', 'animation', 'comedy', 'crime', 'drama', 'fantasy', 'family', 'horror', 'mystery', 'romance', 'sci-fi', 'thriller', 'war', 'western']
+genres.forEach(g => {
+  app.get(`/genre/${g}`, async (c) => c.json({ status: true, data: await scrapeInfinite(`${TARGET}/genre/${g}/`, 10) }))
 })
 
-// 2. ENDPOINT: ANIME LIST
-app.get('/anime-list', async (req, reply) => {
-    const page = await fetchPage(`${BASE_URL}/anime/`);
-    if (!page) return { status: false };
-    const $ = page.load;
-    const results = [];
-    $('.listupd .bs').each((i, el) => {
-        results.push({
-            title: $(el).find('.tt h2').text().trim(),
-            link: $(el).find('a').attr('href'),
-            image: $(el).find('img').attr('src')
-        });
-    });
-    return { status: true, data: results };
+// Countries
+const countries = [
+  { slug: 'korea', id: 'korea' },
+  { slug: 'japan', id: 'japan' },
+  { slug: 'thailand', id: 'thailand' },
+  { slug: 'hong-kong', id: 'hong-kong' }
+]
+countries.forEach(cn => {
+  app.get(`/country/${cn.slug}`, async (c) => {
+    const searchUrl = `${TARGET}/?s=&search=advanced&country=${cn.id}`
+    const data = await scrapeInfinite(searchUrl, 15)
+    return c.json({ status: true, data })
+  })
 })
 
-// 3. ENDPOINT: ANIME BARU DIRILIS
-app.get('/anime-baru-dirilis', async (req, reply) => {
-    const page = await fetchPage(`${BASE_URL}/anime-baru-dirilis/`);
-    if (!page) return { status: false };
-    const $ = page.load;
-    const results = [];
-    $('.listupd .bs').each((i, el) => {
-        results.push({
-            title: $(el).find('.tt h2').text().trim(),
-            link: $(el).find('a').attr('href'),
-            image: $(el).find('img').attr('src'),
-            episode: $(el).find('.epx').text().trim()
-        });
-    });
-    return { status: true, data: results };
+app.get('/semi-jepang', async (c) => c.json({ status: true, data: await scrapeInfinite(`${TARGET}/genre/semi-jepang/`, 15) }))
+app.get('/semi-korea', async (c) => c.json({ status: true, data: await scrapeInfinite(`${TARGET}/genre/semi-korea/`, 15) }))
+app.get('/semi-philippines', async (c) => c.json({ status: true, data: await scrapeInfinite(`${TARGET}/genre/semi-philippines/`, 15) }))
+app.get('/search', async (c) => {
+  const q = c.req.query('q')
+  return c.json({ status: true, data: await scrapeList(`${TARGET}/?s=${q}`) })
 })
 
-// 4. ENDPOINT: GET VIDEO (SUPER SCANNER VERSION)
-app.get('/get-video', async (req, reply) => {
-    const { url } = req.query;
-    if (!url) return { status: false, message: "URL kosong bos!" };
-
-    try {
-        const response = await axios.get(url, { headers: HEADERS, timeout: 10000 });
-        const html = response.data;
-        const $ = cheerio.load(html);
-
-        // A. Cari di Iframe Player (Standard)
-        let videoUrl = $('.video-content iframe').attr('src') || 
-                       $('.player-embed iframe').attr('src') || 
-                       $('#pembed iframe').attr('src');
-
-        // B. Deep Script Scanning (Cari link tersembunyi di JS)
-        if (!videoUrl) {
-            const scripts = $('script').text();
-            const regexLink = /(https?:\/\/[^\s'"]+(?:player|embed|stream|m3u8|mp4)[^\s'"]*)/gi;
-            const matches = scripts.match(regexLink);
-            if (matches) {
-                videoUrl = matches.find(link => !link.includes('animekuindo') && !link.includes('google-analytics'));
-            }
-        }
-
-        // C. Mirror Scanning & Base64 Decoding
-        const mirrors = [];
-        $('.mirror option').each((i, el) => {
-            const val = $(el).attr('value');
-            if (val && val !== "") {
-                let linkFinal = val;
-                // Coba decode jika isinya base64
-                if (!val.startsWith('http')) {
-                    try { linkFinal = Buffer.from(val, 'base64').toString('utf-8'); } catch(e) {}
-                }
-                mirrors.push({
-                    server: $(el).text().trim(),
-                    link: linkFinal.startsWith('http') ? linkFinal : `https:${linkFinal}`
-                });
-            }
-        });
-
-        // D. Final Brute Force Regex (Jika Iframe masih null)
-        if (!videoUrl && mirrors.length > 0) videoUrl = mirrors[0].link;
-
-        return {
-            status: true,
-            title: $('.entry-title').first().text().trim().split('\n')[0],
-            video_url: videoUrl || "Pelindung web terlalu kuat, butuh browser beneran bos!",
-            mirrors: mirrors
-        };
-    } catch (error) {
-        return { status: false, error: error.message };
-    }
+app.get('/detail', async (c) => {
+  try {
+    const url = c.req.query('url')
+    const res = await fetch(url, { headers: { 'User-Agent': UA, 'Referer': TARGET } })
+    const html = await res.text()
+    const $ = load(html)
+    const streams = []
+    $('iframe').each((i, el) => {
+      let src = $(el).attr('src') || $(el).attr('data-src')
+      if (src && !src.includes('ads')) {
+        if (src.startsWith('//')) src = 'https:' + src
+        streams.push(src)
+      }
+    })
+    return c.json({ status: true, streams })
+  } catch { return c.json({ status: false, streams: [] }) }
 })
 
-// 5. ENDPOINT: GENRE
-app.get('/genres/:genre', async (req, reply) => {
-    const { genre } = req.params;
-    const page = await fetchPage(`${BASE_URL}/genres/${genre}/`);
-    if (!page) return { status: false };
-    const $ = page.load;
-    const results = [];
-    $('.listupd .bs').each((i, el) => {
-        results.push({
-            title: $(el).find('.tt h2').text().trim(),
-            link: $(el).find('a').attr('href'),
-            image: $(el).find('img').attr('src')
-        });
-    });
-    return { status: true, data: results };
-})
-
-export default async function handler(req, res) {
-    await app.ready();
-    app.server.emit('request', req, res);
-}
+export default handle(app)
