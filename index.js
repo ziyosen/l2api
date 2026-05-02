@@ -12,27 +12,19 @@ const UA = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like G
 async function scrapeList(url) {
   try {
     const res = await fetch(url, { 
-      headers: { 
-        'User-Agent': UA,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-        'Referer': TARGET
-      },
+      headers: { 'User-Agent': UA, 'Referer': TARGET },
       signal: AbortSignal.timeout(10000) 
     })
     const html = await res.text()
     const $ = load(html)
     const data = []
 
-    // TARGET: Mencari link yang membungkus gambar atau berada di samping gambar
-    // Biasanya di WAP site strukturnya: <div><a><img></a> <br> <a>Judul</a></div>
     $('a').each((i, el) => {
       const link = $(el).attr('href')
       const title = $(el).text().trim()
       const img = $(el).find('img').attr('src') || $(el).parent().find('img').attr('src')
 
       if (link && !link.includes('whatsapp://') && !link.includes('facebook.com')) {
-        // Filter: Hanya ambil link yang punya judul lumayan panjang (asumsi judul film)
-        // Dan bukan link menu navigasi
         const isMenu = /home|paged=|page=|search|contact|login|register|forum|rules|dmca/i.test(link)
         
         if (!isMenu && (title.length > 3 || img)) {
@@ -40,7 +32,7 @@ async function scrapeList(url) {
           let fullImg = img ? (img.startsWith('http') ? img : TARGET + (img.startsWith('/') ? '' : '/') + img) : ''
 
           data.push({
-            title: title || 'No Title',
+            title: title.replace(/Nonton|Movie|Subtitle|Indonesia|Drakor/gi, '').trim(),
             link: fullLink,
             img: fullImg
           })
@@ -48,36 +40,17 @@ async function scrapeList(url) {
       }
     })
 
-    // Jika hasil masih dikit, coba cari di tag <b> atau strong (sering buat judul di WAP)
-    if (data.length < 3) {
-        $('b, strong').each((i, el) => {
-            const parentA = $(el).closest('a')
-            if (parentA.length) {
-                data.push({
-                    title: $(el).text().trim(),
-                    link: TARGET + parentA.attr('href'),
-                    img: ''
-                })
-            }
-        })
-    }
-
-    // Menghapus data sampah (judul yang terlalu pendek atau duplikat)
     return data
       .filter(i => i.title.length > 2 && i.link.includes(TARGET.replace('https://', '')))
       .filter((v, i, a) => a.findIndex(t => (t.link === v.link)) === i)
-  } catch (err) { 
-    return [] 
-  }
+  } catch { return [] }
 }
 
 async function scrapeInfinite(baseUrl, limitPage = 20) {
   let combined = []
-  // Kita ambil batch per 5 agar tidak lambat
   for (let i = 1; i <= limitPage; i += 5) {
     const batch = []
     for (let j = i; j < i + 5 && j <= limitPage; j++) {
-      // Logic URL sesuai request: ?page=J&year=...
       const connector = baseUrl.includes('?') ? '&' : '?'
       const url = `${baseUrl}${connector}page=${j}&year=c2d0de&genre=c2d0de&country=c2d0de&media_type=c2d0de`
       batch.push(scrapeList(url))
@@ -92,52 +65,57 @@ async function scrapeInfinite(baseUrl, limitPage = 20) {
 
 // --- ENDPOINTS ---
 
-// 1. Endpoint Utama (Home)
-app.get('/', async (c) => {
-  const data = await scrapeList(TARGET)
-  return c.json({ status: true, data })
-})
+app.get('/', async (c) => c.json({ status: true, data: await scrapeList(TARGET) }))
 
-// 2. Endpoint All (Ambil 20 Halaman)
 app.get('/all', async (c) => {
   const data = await scrapeInfinite(`${TARGET}/all`, 20)
-  return c.json({ 
-    status: true, 
-    total: data.length,
-    data 
-  })
+  return c.json({ status: true, total: data.length, data })
 })
 
-// 3. Search
 app.get('/search', async (c) => {
   const q = c.req.query('q')
-  if (!q) return c.json({ status: false, message: 'Masukkan parameter q' })
-  const data = await scrapeList(`${TARGET}/search?q=${q}`)
-  return c.json({ status: true, data })
+  if (!q) return c.json({ status: false, message: 'Query q diperlukan' })
+  return c.json({ status: true, data: await scrapeList(`${TARGET}/search?q=${q}`) })
 })
 
-// 4. Detail (Ambil Iframe)
+// ENDPOINT DETAIL (Target Khusus: /detail/made-in-korea-...)
 app.get('/detail', async (c) => {
   try {
     const url = c.req.query('url')
-    const res = await fetch(url, { headers: { 'User-Agent': UA } })
+    if (!url) return c.json({ status: false, streams: [] })
+
+    const res = await fetch(url, { headers: { 'User-Agent': UA, 'Referer': TARGET } })
     const html = await res.text()
     const $ = load(html)
-    const streams = []
+    let streams = []
     
-    // Cari semua iframe atau link yang mengandung kata "stream" atau "embed"
-    $('iframe, a').each((i, el) => {
-      let src = $(el).attr('src') || $(el).attr('href')
-      if (src && (src.includes('embed') || src.includes('stream') || src.includes('player'))) {
-         if (src.startsWith('//')) src = 'https:' + src
-         if (src.startsWith('http')) streams.push(src)
+    // 1. Cari Iframe
+    $('iframe').each((i, el) => {
+      let src = $(el).attr('src') || $(el).attr('data-src')
+      if (src && !src.includes('ads')) {
+        if (src.startsWith('//')) src = 'https:' + src
+        streams.push(src)
       }
     })
-    
-    return c.json({ status: true, streams: [...new Set(streams)] })
-  } catch { 
-    return c.json({ status: false, streams: [] }) 
-  }
+
+    // 2. Cari Link Tombol Player/Server (Pola WAP)
+    if (streams.length === 0) {
+      $('a').each((i, el) => {
+        const txt = $(el).text().toLowerCase()
+        const href = $(el).attr('href')
+        if (href && (txt.includes('player') || txt.includes('server') || txt.includes('stream') || txt.includes('embed'))) {
+           let fullLink = href.startsWith('http') ? href : TARGET + (href.startsWith('/') ? '' : '/') + href
+           if (!fullLink.includes('search')) streams.push(fullLink)
+        }
+      })
+    }
+
+    return c.json({ 
+      status: streams.length > 0, 
+      title: $('h1, .title, b').first().text().trim(),
+      streams: [...new Set(streams)] 
+    })
+  } catch { return c.json({ status: false, streams: [] }) }
 })
 
 export default handle(app)
