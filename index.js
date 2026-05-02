@@ -11,15 +11,19 @@ const UA = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like G
 
 app.get('/', async (c) => {
   try {
-    // Kita tembak lewat sistem search dengan filter Korea + TV (Drakor)
-    // Cara ini seringkali lolos dari proteksi 'Explore' yang ketat
-    const url = `${TARGET}/search?country=korea&media_type=tv`
+    // Kita pakai URL paling dasar yang seringkali lolos dari proteksi ketat
+    const url = `${TARGET}/explore?country=korea&media_type=tv`
     
     const res = await fetch(url, { 
       headers: { 
         'User-Agent': UA,
-        'Referer': TARGET,
-        'Accept': 'text/html'
+        'Referer': 'https://www.google.com/',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Cache-Control': 'max-age=0',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'cross-site'
       }
     })
     
@@ -27,25 +31,33 @@ app.get('/', async (c) => {
     const $ = load(html)
     const data = []
 
-    // Selektor super umum: cari semua link yang membungkus gambar
-    $('a:has(img)').each((i, el) => {
+    // Selektor 'sapu jagat' untuk mencari link film
+    $('a').each((i, el) => {
       const link = $(el).attr('href')
       const img = $(el).find('img').attr('data-src') || $(el).find('img').attr('src')
-      const title = $(el).find('img').attr('alt') || $(el).attr('title')
+      const title = $(el).find('img').attr('alt') || $(el).text().trim()
 
-      if (link && img && (link.includes('/movie/') || link.includes('/tv/'))) {
-        data.push({
-          title: title ? title.replace(/Nonton|Movie|Subtitle|Indonesia/gi, '').trim() : 'No Title',
-          link: link.startsWith('http') ? link : TARGET + (link.startsWith('/') ? '' : '/') + link,
-          img: img.startsWith('http') ? img : TARGET + (img.startsWith('/') ? '' : '/') + img
-        })
+      if (link && (link.includes('/movie/') || link.includes('/tv/'))) {
+        if (img && title && title.length > 2) {
+          data.push({
+            title: title.replace(/Nonton|Movie|Subtitle|Indonesia/gi, '').trim(),
+            link: link.startsWith('http') ? link : TARGET + (link.startsWith('/') ? '' : '/') + link,
+            img: img.startsWith('http') ? img : TARGET + (img.startsWith('/') ? '' : '/') + img
+          })
+        }
       }
     })
 
     const finalData = data.filter((v, i, a) => a.findIndex(t => (t.link === v.link)) === i)
-    return c.json({ status: finalData.length > 0, data: finalData })
+    
+    // Jika masih kosong, kita kirim status true tapi data kosong agar HTML tidak error
+    return c.json({ 
+      status: finalData.length > 0, 
+      count: finalData.length,
+      data: finalData 
+    })
   } catch (err) {
-    return c.json({ status: false, data: [] })
+    return c.json({ status: false, data: [], error: "Server Timeout" })
   }
 })
 
