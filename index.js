@@ -11,16 +11,20 @@ const UA = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like G
 
 async function scrapeSerial(path) {
   try {
-    const res = await fetch(`${TARGET}/${path}`, { 
+    // Pastikan path diawali slash jika tidak kosong
+    const cleanPath = path ? (path.startsWith('/') ? path : `/${path}`) : ''
+    const url = `${TARGET}${cleanPath}`
+    
+    const res = await fetch(url, { 
       headers: { 'User-Agent': UA, 'Referer': TARGET } 
     })
     const html = await res.text()
     const $ = load(html)
     const data = []
 
-    // Selektor khusus untuk Serial-Drakor (biasanya pakai article atau .ml-item)
-    $('article, .ml-item, .item').each((i, el) => {
-      const title = $(el).find('h2, h3, .entry-title, .mli-info h2').text().trim()
+    // Selektor mli-item biasanya sangat akurat di situs drakor
+    $('.ml-item, .item, article').each((i, el) => {
+      const title = $(el).find('h2, h3, .mli-info h2').text().trim() || $(el).find('img').attr('alt')
       const link = $(el).find('a').attr('href')
       let img = $(el).find('img').attr('data-original') || $(el).find('img').attr('src')
 
@@ -37,21 +41,27 @@ async function scrapeSerial(path) {
   } catch { return [] }
 }
 
-// --- ENDPOINTS ---
+// --- ENDPOINTS SESUAI REQUEST BOS ---
 
-// Home: Menampilkan K-Movie
+// 1. Home (/)
 app.get('/', async (c) => {
-  const data = await scrapeSerial('category/k-movie/')
+  const data = await scrapeSerial('')
   return c.json({ status: data.length > 0, data })
 })
 
-// Paling Banyak Dilihat
-app.get('/trending', async (c) => {
-  const data = await scrapeSerial('most-viewed/')
+// 2. DrakorIndo (/drakorindo/)
+app.get('/drakorindo', async (c) => {
+  const data = await scrapeSerial('/drakorindo/')
   return c.json({ status: data.length > 0, data })
 })
 
-// Detail Player
+// 3. K-Movie (/category/k-movie/)
+app.get('/k-movie', async (c) => {
+  const data = await scrapeSerial('/category/k-movie/')
+  return c.json({ status: data.length > 0, data })
+})
+
+// Endpoint Detail Player
 app.get('/detail', async (c) => {
   try {
     const url = c.req.query('url')
@@ -62,7 +72,7 @@ app.get('/detail', async (c) => {
     
     $('iframe').each((i, el) => {
       let src = $(el).attr('src') || $(el).attr('data-src')
-      if (src && !/ads|facebook/i.test(src)) {
+      if (src && !/ads|facebook|twitter/i.test(src)) {
         if (src.startsWith('//')) src = 'https:' + src
         streams.push(src)
       }
