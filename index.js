@@ -7,7 +7,8 @@ const app = new Hono()
 app.use('/*', cors())
 
 const TARGET = 'https://dutafilm.in'
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+// User Agent asli supaya tidak dianggap bot oleh server mereka
+const UA = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36'
 
 async function scrapeDuta(url) {
   try {
@@ -15,36 +16,42 @@ async function scrapeDuta(url) {
       headers: { 
         'User-Agent': UA,
         'Referer': TARGET,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Upgrade-Insecure-Requests': '1'
       } 
     })
     const html = await res.text()
     const $ = load(html)
     const data = []
 
-    // Selektor khusus untuk struktur grid DutaFilm (ul.item-list atau .item)
-    $('.item-list li, .item, [class*="item"]').each((i, el) => {
-      const link = $(el).find('a').attr('href')
-      const title = $(el).find('img').attr('alt') || $(el).find('.title, h2, h3').text().trim()
+    // Selektor baru yang lebih umum untuk DutaFilm
+    $('a').each((i, el) => {
+      const link = $(el).attr('href')
+      const title = $(el).find('img').attr('alt') || $(el).attr('title') || $(el).text().trim()
       const img = $(el).find('img').attr('data-src') || $(el).find('img').attr('src')
 
-      if (link && title && !link.includes('javascript')) {
-        data.push({
-          title: title,
-          link: link.startsWith('http') ? link : TARGET + (link.startsWith('/') ? '' : '/') + link,
-          img: img ? (img.startsWith('http') ? img : TARGET + (img.startsWith('/') ? '' : '/') + img) : ''
-        })
+      // Filter: Hanya ambil yang punya link ke film dan punya gambar/judul
+      if (link && link.includes('/movie/') || link && link.includes('/tv/')) {
+        if (title && title.length > 2) {
+          data.push({
+            title: title,
+            link: link.startsWith('http') ? link : TARGET + (link.startsWith('/') ? '' : '/') + link,
+            img: img ? (img.startsWith('http') ? img : TARGET + (img.startsWith('/') ? '' : '/') + img) : ''
+          })
+        }
       }
     })
-    return data
+
+    // Hapus duplikat berdasarkan link
+    return data.filter((v, i, a) => a.findIndex(t => (t.link === v.link)) === i)
   } catch (err) {
     return []
   }
 }
 
 app.get('/', async (c) => {
-  // Langsung tembak ke kategori Korea TV (Drakor)
-  const url = `${TARGET}/explore?country=korea&media_type=tv`
+  // Pakai endpoint explore yang kamu berikan sebagai default
+  const url = `${TARGET}/explore?page=1&media_type=tv&year=d7d9db&genre=d7d9db&country=d7d9db`
   const results = await scrapeDuta(url)
   return c.json({ status: results.length > 0, data: results })
 })
@@ -63,10 +70,10 @@ app.get('/detail', async (c) => {
     const $ = load(html)
     let streams = []
     
-    // Cari iframe atau link player
-    $('iframe, #player-embed iframe').each((i, el) => {
+    // Cari semua iframe yang mungkin jadi player
+    $('iframe').each((i, el) => {
       let src = $(el).attr('src') || $(el).attr('data-src')
-      if (src && !src.includes('ads')) {
+      if (src && !src.includes('ads') && !src.includes('facebook')) {
         if (src.startsWith('//')) src = 'https:' + src
         streams.push(src)
       }
