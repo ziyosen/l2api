@@ -24,13 +24,11 @@ async function scrapeList(url) {
       const title = $(el).text().trim()
       const img = $(el).find('img').attr('src') || $(el).parent().find('img').attr('src')
 
-      if (link && !link.includes('whatsapp://') && !link.includes('facebook.com')) {
-        const isMenu = /home|paged=|page=|search|contact|login|register|forum|rules|dmca/i.test(link)
-        
+      if (link && !link.includes('whatsapp') && !link.includes('facebook')) {
+        const isMenu = /home|page=|paged=|search|contact|login|register|forum|rules|dmca/i.test(link)
         if (!isMenu && (title.length > 3 || img)) {
           let fullLink = link.startsWith('http') ? link : TARGET + (link.startsWith('/') ? '' : '/') + link
           let fullImg = img ? (img.startsWith('http') ? img : TARGET + (img.startsWith('/') ? '' : '/') + img) : ''
-
           data.push({
             title: title.replace(/Nonton|Movie|Subtitle|Indonesia|Drakor/gi, '').trim(),
             link: fullLink,
@@ -39,57 +37,35 @@ async function scrapeList(url) {
         }
       }
     })
-
-    return data
-      .filter(i => i.title.length > 2 && i.link.includes(TARGET.replace('https://', '')))
-      .filter((v, i, a) => a.findIndex(t => (t.link === v.link)) === i)
+    return data.filter((v, i, a) => a.findIndex(t => (t.link === v.link)) === i)
   } catch { return [] }
 }
-
-async function scrapeInfinite(baseUrl, limitPage = 20) {
-  let combined = []
-  for (let i = 1; i <= limitPage; i += 5) {
-    const batch = []
-    for (let j = i; j < i + 5 && j <= limitPage; j++) {
-      const connector = baseUrl.includes('?') ? '&' : '?'
-      const url = `${baseUrl}${connector}page=${j}&year=c2d0de&genre=c2d0de&country=c2d0de&media_type=c2d0de`
-      batch.push(scrapeList(url))
-    }
-    const results = await Promise.all(batch)
-    const flatRes = results.flat()
-    if (flatRes.length === 0) break 
-    combined = [...combined, ...flatRes]
-  }
-  return combined.filter((v, i, a) => a.findIndex(t => (t.link === v.link)) === i)
-}
-
-// --- ENDPOINTS ---
 
 app.get('/', async (c) => c.json({ status: true, data: await scrapeList(TARGET) }))
 
 app.get('/all', async (c) => {
-  const data = await scrapeInfinite(`${TARGET}/all`, 20)
-  return c.json({ status: true, total: data.length, data })
+  let combined = []
+  for (let j = 1; j <= 20; j++) {
+    const url = `${TARGET}/all?page=${j}&year=c2d0de&genre=c2d0de&country=c2d0de&media_type=c2d0de`
+    combined = [...combined, ...(await scrapeList(url))]
+  }
+  return c.json({ status: true, data: combined.filter((v, i, a) => a.findIndex(t => (t.link === v.link)) === i) })
 })
 
 app.get('/search', async (c) => {
   const q = c.req.query('q')
-  if (!q) return c.json({ status: false, message: 'Query q diperlukan' })
   return c.json({ status: true, data: await scrapeList(`${TARGET}/search?q=${q}`) })
 })
 
-// ENDPOINT DETAIL (Target Khusus: /detail/made-in-korea-...)
 app.get('/detail', async (c) => {
   try {
     const url = c.req.query('url')
-    if (!url) return c.json({ status: false, streams: [] })
-
     const res = await fetch(url, { headers: { 'User-Agent': UA, 'Referer': TARGET } })
     const html = await res.text()
     const $ = load(html)
     let streams = []
     
-    // 1. Cari Iframe
+    // 1. Cari iframe langsung
     $('iframe').each((i, el) => {
       let src = $(el).attr('src') || $(el).attr('data-src')
       if (src && !src.includes('ads')) {
@@ -98,7 +74,7 @@ app.get('/detail', async (c) => {
       }
     })
 
-    // 2. Cari Link Tombol Player/Server (Pola WAP)
+    // 2. Cari tombol player/server kalau iframe gak ada
     if (streams.length === 0) {
       $('a').each((i, el) => {
         const txt = $(el).text().toLowerCase()
@@ -110,11 +86,7 @@ app.get('/detail', async (c) => {
       })
     }
 
-    return c.json({ 
-      status: streams.length > 0, 
-      title: $('h1, .title, b').first().text().trim(),
-      streams: [...new Set(streams)] 
-    })
+    return c.json({ status: streams.length > 0, streams: [...new Set(streams)] })
   } catch { return c.json({ status: false, streams: [] }) }
 })
 
