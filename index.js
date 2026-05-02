@@ -13,97 +13,109 @@ async function scrapeList(url) {
   try {
     const res = await fetch(url, { 
       headers: { 'User-Agent': UA, 'Referer': TARGET },
-      signal: AbortSignal.timeout(8000) 
+      signal: AbortSignal.timeout(10000) 
     })
     const html = await res.text()
     const $ = load(html)
     const data = []
 
-    // Selector disesuaikan dengan struktur umum site drakorkita
-    $('.item, .post-item, .list-item, div[class*="item"]').each((i, el) => {
-      const title = $(el).find('h2, h3, .title, a').first().text().trim()
-      let link = $(el).find('a').attr('href')
-      let img = $(el).find('img').attr('src') || $(el).find('img').attr('data-src')
+    // Mencari elemen link yang kemungkinan besar adalah item film/drama
+    $('a').each((i, el) => {
+      const link = $(el).attr('href')
+      const title = $(el).text().trim()
+      const img = $(el).find('img').attr('src') || $(el).closest('div').find('img').attr('src')
 
-      if (title && link) {
-        // Pastikan link absolut
-        if (link.startsWith('/')) link = TARGET + link
-        if (img && img.startsWith('//')) img = 'https:' + img
+      if (link && title && title.length > 3) {
+        // Abaikan link navigasi umum agar tidak masuk daftar film
+        const isNav = /login|register|forum|blog|contact|home|page=|search|forgot/i.test(link)
         
-        data.push({ 
-          title: title.replace(/Nonton|Movie|Subtitle|Indonesia/gi, '').trim(), 
-          link, 
-          img: img || '' 
-        })
+        if (!isNav) {
+          let fullLink = link.startsWith('http') ? link : TARGET + (link.startsWith('/') ? '' : '/') + link
+          
+          // Pastikan link mengarah ke konten (bukan external link sosial media)
+          if (fullLink.includes(TARGET.replace('https://', ''))) {
+            data.push({ 
+              title: title.replace(/Nonton|Movie|Subtitle|Indonesia/gi, '').trim(), 
+              link: fullLink, 
+              img: img ? (img.startsWith('http') ? img : TARGET + (img.startsWith('/') ? '' : '/') + img) : '' 
+            })
+          }
+        }
       }
     })
-    return data
+
+    // Filter unik berdasarkan link
+    return data.filter((v, i, a) => a.findIndex(t => (t.link === v.link)) === i)
   } catch (err) { 
-    console.error('Scrape error:', err.message)
+    console.error('Fetch error:', err.message)
     return [] 
   }
 }
 
 async function scrapeInfinite(baseUrl, limitPage = 20) {
   let combined = []
-  // Kita ambil batch per 5 page agar tidak terkena rate limit/timeout
+  // Batch processing (Ambil 5 halaman sekaligus per putaran)
   for (let i = 1; i <= limitPage; i += 5) {
     const batch = []
     for (let j = i; j < i + 5 && j <= limitPage; j++) {
-      // Logic URL Baru: Menggunakan query parameter ?page=
+      // Format URL sesuai keinginanmu: ?page=J&year=...
       const url = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}page=${j}&year=c2d0de&genre=c2d0de&country=c2d0de&media_type=c2d0de`
       batch.push(scrapeList(url))
     }
     const results = await Promise.all(batch)
     const flatRes = results.flat()
+    
     if (flatRes.length === 0) break 
     combined = [...combined, ...flatRes]
   }
-  // Menghapus duplikat berdasarkan link
   return combined.filter((v, i, a) => a.findIndex(t => (t.link === v.link)) === i)
 }
 
 // --- ENDPOINTS ---
 
-// 1. Endpoint Home (Ambil 1-2 page saja agar cepat)
+// Home - Ambil 2 halaman saja supaya cepat
 app.get('/', async (c) => {
   const data = await scrapeInfinite(TARGET, 2)
-  return c.json({ status: true, source: TARGET, data })
+  return c.json({ status: true, data })
 })
 
-// 2. Endpoint All (Ambil 20 page sesuai request)
+// All - Ambil 20 halaman sesuai request
 app.get('/all', async (c) => {
   const data = await scrapeInfinite(`${TARGET}/all`, 20)
   return c.json({ 
     status: true, 
-    total_results: data.length,
+    total: data.length,
     data 
   })
 })
 
-// Endpoint Search
+// Search
 app.get('/search', async (c) => {
   const q = c.req.query('q')
+  if (!q) return c.json({ status: false, message: 'Query q is required' })
   const data = await scrapeList(`${TARGET}/search?q=${q}`)
   return c.json({ status: true, data })
 })
 
-// Endpoint Detail (Untuk ambil link stream/iframe)
+// Detail (Ambil Player/Iframe)
 app.get('/detail', async (c) => {
   try {
     const url = c.req.query('url')
+    if (!url) return c.json({ status: false, message: 'URL is required' })
+    
     const res = await fetch(url, { headers: { 'User-Agent': UA } })
     const html = await res.text()
     const $ = load(html)
     const streams = []
     
-    $('iframe').each((i, el) => {
-      let src = $(el).attr('src') || $(el).attr('data-src')
+    $('iframe, video, source').each((i, el) => {
+      let src = $(el).attr('src') || $(el).attr('data-src') || $(el).attr('data-lazy-src')
       if (src && !src.includes('ads')) {
         if (src.startsWith('//')) src = 'https:' + src
         streams.push(src)
       }
     })
+    
     return c.json({ status: true, streams })
   } catch { 
     return c.json({ status: false, streams: [] }) 
