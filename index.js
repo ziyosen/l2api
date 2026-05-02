@@ -6,44 +6,45 @@ import { handle } from '@hono/node-server/vercel'
 const app = new Hono()
 app.use('/*', cors())
 
-const TARGET = 'https://drakorkita.mywap.in'
-const UA = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36'
+const TARGET = 'https://dutafilm.in'
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 
-// Fungsi Scraper List
-async function scrapeList(url) {
+async function scrapeDuta(url) {
   try {
     const res = await fetch(url, { headers: { 'User-Agent': UA, 'Referer': TARGET } })
     const html = await res.text()
     const $ = load(html)
     const data = []
 
-    $('a').each((i, el) => {
-      const link = $(el).attr('href')
-      const title = $(el).text().trim()
-      const img = $(el).find('img').attr('src') || $(el).parent().find('img').attr('src')
+    // Selektor disesuaikan untuk grid film DutaFilm
+    $('.item').each((i, el) => {
+      const link = $(el).find('a').attr('href')
+      const title = $(el).find('img').attr('alt') || $(el).find('.title').text().trim()
+      const img = $(el).find('img').attr('data-src') || $(el).find('img').attr('src')
 
-      if (link && !/home|page=|paged=|search|contact|login|register|forum|rules|dmca/i.test(link)) {
-        if (title.length > 3 || img) {
-          data.push({
-            title: title.replace(/Nonton|Movie|Subtitle|Indonesia|Drakor/gi, '').trim(),
-            link: link.startsWith('http') ? link : TARGET + (link.startsWith('/') ? '' : '/') + link,
-            img: img ? (img.startsWith('http') ? img : TARGET + (img.startsWith('/') ? '' : '/') + img) : ''
-          })
-        }
+      if (link && title) {
+        data.push({
+          title: title,
+          link: link.startsWith('http') ? link : TARGET + link,
+          img: img ? (img.startsWith('http') ? img : TARGET + img) : ''
+        })
       }
     })
-    return data.filter((v, i, a) => a.findIndex(t => (t.link === v.link)) === i)
+    return data
   } catch { return [] }
 }
 
-app.get('/', async (c) => c.json({ status: true, data: await scrapeList(TARGET) }))
+// Endpoint khusus drakor sesuai permintaan kamu
+app.get('/', async (c) => {
+  const url = `${TARGET}/explore?country=korea&media_type=tv`
+  return c.json({ status: true, data: await scrapeDuta(url) })
+})
 
 app.get('/search', async (c) => {
   const q = c.req.query('q')
-  return c.json({ status: true, data: await scrapeList(`${TARGET}/search?q=${q}`) })
+  return c.json({ status: true, data: await scrapeDuta(`${TARGET}/search?q=${q}`) })
 })
 
-// INI BAGIAN YANG PALING PENTING (DIPERBAIKI)
 app.get('/detail', async (c) => {
   try {
     const url = c.req.query('url')
@@ -52,35 +53,13 @@ app.get('/detail', async (c) => {
     const $ = load(html)
     let streams = []
     
-    // 1. Cari SEMUA iframe (biasanya player ada di sini)
+    // Cari iframe player DutaFilm
     $('iframe').each((i, el) => {
-      let src = $(el).attr('src') || $(el).attr('data-src')
-      if (src && !/ads|facebook|twitter/i.test(src)) {
-        if (src.startsWith('//')) src = 'https:' + src
-        streams.push(src)
-      }
+      let src = $(el).attr('src')
+      if (src && !src.includes('ads')) streams.push(src)
     })
 
-    // 2. Cari link di tombol "Player", "Server", atau "Streaming"
-    $('a').each((i, el) => {
-      const txt = $(el).text().toLowerCase()
-      const href = $(el).attr('href')
-      if (href && (txt.includes('player') || txt.includes('server') || txt.includes('stream') || txt.includes('embed') || txt.includes('fast'))) {
-        let fullLink = href.startsWith('http') ? href : TARGET + (href.startsWith('/') ? '' : '/') + href
-        if (!fullLink.includes('search')) streams.push(fullLink)
-      }
-    })
-
-    // 3. Cari link MP4/M3U8 mentah di dalam script
-    const scripts = $('script').text()
-    const videoRegex = /(https?:\/\/[^\s'"]+\.(mp4|m3u8|mov))/gi
-    const found = scripts.match(videoRegex)
-    if (found) streams.push(...found)
-
-    return c.json({ 
-      status: streams.length > 0, 
-      streams: [...new Set(streams)] 
-    })
+    return c.json({ status: streams.length > 0, streams: streams })
   } catch { return c.json({ status: false, streams: [] }) }
 })
 
