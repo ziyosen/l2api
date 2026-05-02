@@ -6,62 +6,77 @@ import { handle } from '@hono/node-server/vercel'
 const app = new Hono()
 app.use('/*', cors())
 
+// URL Target Baru
 const TARGET = 'https://serial-drakor.com'
 const UA = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36'
 
-async function scrapeSerial(path) {
+async function scrapeList(url) {
   try {
-    // Pastikan path diawali slash jika tidak kosong
-    const cleanPath = path ? (path.startsWith('/') ? path : `/${path}`) : ''
-    const url = `${TARGET}${cleanPath}`
-    
     const res = await fetch(url, { 
-      headers: { 'User-Agent': UA, 'Referer': TARGET } 
+      headers: { 'User-Agent': UA, 'Referer': TARGET },
+      signal: AbortSignal.timeout(8000) 
     })
     const html = await res.text()
     const $ = load(html)
     const data = []
 
-    // Selektor mli-item biasanya sangat akurat di situs drakor
-    $('.ml-item, .item, article').each((i, el) => {
-      const title = $(el).find('h2, h3, .mli-info h2').text().trim() || $(el).find('img').attr('alt')
+    // Selektor universal untuk Serial-Drakor
+    $('.ml-item, article, .item, .post-item, .v-item').each((i, el) => {
+      const title = $(el).find('h2, h3, .entry-title, .mli-info h2, a.title, img').first().attr('alt') || $(el).find('h2, h3, .title').text().trim()
       const link = $(el).find('a').attr('href')
-      let img = $(el).find('img').attr('data-original') || $(el).find('img').attr('src')
-
+      let img = $(el).find('img').attr('data-original') || $(el).find('img').attr('data-src') || $(el).find('img').attr('src')
+      
+      // Syarat: Ada judul dan link
       if (title && link) {
         if (img && img.startsWith('//')) img = 'https:' + img
-        data.push({
-          title: title.replace(/Nonton|Movie|Subtitle|Indonesia/gi, '').trim(),
-          link: link,
-          img: img || ''
+        
+        data.push({ 
+          title: title.replace(/Nonton|Movie|Subtitle|Indonesia|Drakor/gi, '').trim(), 
+          link: link.startsWith('http') ? link : `${TARGET}${link.startsWith('/') ? '' : '/'}${link}`, 
+          img: img || '' 
         })
       }
     })
-    return data.filter((v, i, a) => a.findIndex(t => (t.link === v.link)) === i)
+    return data
   } catch { return [] }
 }
 
-// --- ENDPOINTS SESUAI REQUEST BOS ---
+async function scrapeInfinite(baseUrl, limitPage = 3) {
+  let combined = []
+  for (let j = 1; j <= limitPage; j++) {
+    // Penyesuaian paging Serial-Drakor
+    let url = j === 1 ? baseUrl : `${baseUrl.endsWith('/') ? baseUrl : baseUrl + '/'}page/${j}/`
+    const results = await scrapeList(url)
+    if (results.length === 0) break 
+    combined = [...combined, ...results]
+  }
+  return combined.filter((v, i, a) => a.findIndex(t => (t.link === v.link)) === i);
+}
+
+// --- ENDPOINTS SESUAI PERMINTAAN ---
 
 // 1. Home (/)
 app.get('/', async (c) => {
-  const data = await scrapeSerial('')
-  return c.json({ status: data.length > 0, data })
+    return c.json({ status: true, data: await scrapeInfinite(TARGET, 2) })
 })
 
 // 2. DrakorIndo (/drakorindo/)
 app.get('/drakorindo', async (c) => {
-  const data = await scrapeSerial('/drakorindo/')
-  return c.json({ status: data.length > 0, data })
+    return c.json({ status: true, data: await scrapeInfinite(`${TARGET}/drakorindo/`, 3) })
 })
 
 // 3. K-Movie (/category/k-movie/)
 app.get('/k-movie', async (c) => {
-  const data = await scrapeSerial('/category/k-movie/')
-  return c.json({ status: data.length > 0, data })
+    return c.json({ status: true, data: await scrapeInfinite(`${TARGET}/category/k-movie/`, 3) })
 })
 
-// Endpoint Detail Player
+// Search
+app.get('/search', async (c) => {
+  const q = c.req.query('q')
+  return c.json({ status: true, data: await scrapeList(`${TARGET}/?s=${q}`) })
+})
+
+// Detail Player
 app.get('/detail', async (c) => {
   try {
     const url = c.req.query('url')
@@ -69,7 +84,6 @@ app.get('/detail', async (c) => {
     const html = await res.text()
     const $ = load(html)
     const streams = []
-    
     $('iframe').each((i, el) => {
       let src = $(el).attr('src') || $(el).attr('data-src')
       if (src && !/ads|facebook|twitter/i.test(src)) {
@@ -77,7 +91,7 @@ app.get('/detail', async (c) => {
         streams.push(src)
       }
     })
-    return c.json({ status: streams.length > 0, streams })
+    return c.json({ status: true, streams })
   } catch { return c.json({ status: false, streams: [] }) }
 })
 
