@@ -7,7 +7,6 @@ const app = new Hono()
 app.use('/*', cors())
 
 const TARGET = 'https://dutafilm.in'
-// User Agent asli supaya tidak dianggap bot oleh server mereka
 const UA = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36'
 
 async function scrapeDuta(url) {
@@ -16,22 +15,20 @@ async function scrapeDuta(url) {
       headers: { 
         'User-Agent': UA,
         'Referer': TARGET,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-        'Upgrade-Insecure-Requests': '1'
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
       } 
     })
     const html = await res.text()
     const $ = load(html)
     const data = []
 
-    // Selektor baru yang lebih umum untuk DutaFilm
-    $('a').each((i, el) => {
-      const link = $(el).attr('href')
-      const title = $(el).find('img').attr('alt') || $(el).attr('title') || $(el).text().trim()
+    // Mencari elemen list film/drama di halaman explore
+    $('li, .item, .grid-item').each((i, el) => {
+      const link = $(el).find('a').attr('href')
+      const title = $(el).find('h2, h3, .title').text().trim() || $(el).find('img').attr('alt')
       const img = $(el).find('img').attr('data-src') || $(el).find('img').attr('src')
 
-      // Filter: Hanya ambil yang punya link ke film dan punya gambar/judul
-      if (link && link.includes('/movie/') || link && link.includes('/tv/')) {
+      if (link && (link.includes('/movie/') || link.includes('/tv/'))) {
         if (title && title.length > 2) {
           data.push({
             title: title,
@@ -42,7 +39,6 @@ async function scrapeDuta(url) {
       }
     })
 
-    // Hapus duplikat berdasarkan link
     return data.filter((v, i, a) => a.findIndex(t => (t.link === v.link)) === i)
   } catch (err) {
     return []
@@ -50,8 +46,8 @@ async function scrapeDuta(url) {
 }
 
 app.get('/', async (c) => {
-  // Pakai endpoint explore yang kamu berikan sebagai default
-  const url = `${TARGET}/explore?page=1&media_type=tv&year=d7d9db&genre=d7d9db&country=d7d9db`
+  // Menggunakan endpoint Korea yang baru kamu kasih
+  const url = `${TARGET}/explore/country/korea`
   const results = await scrapeDuta(url)
   return c.json({ status: results.length > 0, data: results })
 })
@@ -70,10 +66,10 @@ app.get('/detail', async (c) => {
     const $ = load(html)
     let streams = []
     
-    // Cari semua iframe yang mungkin jadi player
+    // Cari iframe player
     $('iframe').each((i, el) => {
       let src = $(el).attr('src') || $(el).attr('data-src')
-      if (src && !src.includes('ads') && !src.includes('facebook')) {
+      if (src && !/ads|facebook|twitter/i.test(src)) {
         if (src.startsWith('//')) src = 'https:' + src
         streams.push(src)
       }
