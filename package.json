@@ -1,14 +1,9 @@
 {
   "name": "l2api",
-  "version": "1.0.0",
-  "main": "index.js",
   "type": "module",
-  "scripts": {
-    "start": "node index.js"
-  },
   "dependencies": {
-    "@fastify/cors": "^9.0.1",
-    "cheerio": "^1.0.0-rc.12",
-    "fastify": "^4.26.2"
+    "hono": "^4.0.0",
+    "@hono/node-server": "^1.10.0",
+    "cheerio": "^1.0.0-rc.12"
   }
 }
